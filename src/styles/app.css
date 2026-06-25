@@ -1,0 +1,22 @@
+@import "tailwindcss";
+@import "@novasamatech/tr-ui/styles.css";
+@config "../../tailwind.config.ts";
+
+/* TrUI's styles.css owns the page background: `body { background-color:
+   hsl(var(--background)) }`, switched by the `.dark` class on <html> (toggled by
+   ThemeProvider.setMode). We must NOT override `background` here, or the theme
+   won't switch. Keep app-specific styling token-based; never hardcode hex.
+   Pink/violet are brand accents — use sparingly (the "Live" indicator). */
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  color: hsl(var(--foreground));
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}

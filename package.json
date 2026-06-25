@@ -1,0 +1,39 @@
+{
+  "name": "anytub3",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "AnyTub3 — IPTV décentralisée .dot avec continuité inter-hosts (Polkadot product)",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b --noEmit",
+    "lint": "tsc -b --noEmit",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@novasamatech/tr-ui": "^0.2.11",
+    "@parity/product-sdk-cloud-storage": "^0.6.6",
+    "@parity/product-sdk-crypto": "^0.1.1",
+    "@parity/product-sdk-host": "^0.11.0",
+    "@parity/product-sdk-keys": "^0.3.12",
+    "@parity/product-sdk-statement-store": "^0.4.10",
+    "hls.js": "^1.6",
+    "lucide-react": "^1.21",
+    "react": "^19",
+    "react-compiler-runtime": "^1.0.0",
+    "react-dom": "^19"
+  },
+  "devDependencies": {
+    "@parity/host-api-test-sdk": "^0.9.2",
+    "@playwright/test": "^1.61",
+    "@tailwindcss/vite": "^4.3",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^5.2",
+    "tailwindcss": "^4.3",
+    "typescript": "^5.7",
+    "vite": "^7"
+  }
+}

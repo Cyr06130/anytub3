@@ -1,0 +1,233 @@
+import Hls from "hls.js";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Maximize, Minimize } from "lucide-react";
+
+type HlsPlayerProps = {
+  src: string;
+  /** Fired once the stream is actually playing (used to publish now-playing). */
+  onPlaying?: () => void;
+  onError?: (message: string) => void;
+  autoPlay?: boolean;
+  className?: string;
+};
+
+type VideoEl = HTMLVideoElement & {
+  webkitEnterFullscreen?: () => void;
+  webkitRequestFullscreen?: () => Promise<void> | void;
+};
+type FsEl = HTMLElement & {
+  webkitRequestFullscreen?: () => Promise<void> | void;
+};
+type FsDoc = Document & {
+  webkitFullscreenElement?: Element | null;
+  webkitExitFullscreen?: () => Promise<void> | void;
+};
+
+function currentFullscreenElement(): Element | null {
+  return document.fullscreenElement ?? (document as FsDoc).webkitFullscreenElement ?? null;
+}
+
+/**
+ * Try to enter REAL fullscreen on a node, across vendor prefixes (incl. iOS
+ * video-only). Returns true ONLY if it actually engaged.
+ *
+ * Why this is defensive: it works on Polkadot Web (the product iframe is granted
+ * `allow="fullscreen"`, so `document.fullscreenEnabled` is true and the call
+ * enters fullscreen) but NOT on Polkadot Desktop, where the API is either
+ * disabled (fullscreenEnabled === false) or its promise resolves/hangs without
+ * entering. So we (a) only try the standard API when it's actually enabled,
+ * (b) never block on a pending promise, and (c) verify via
+ * `document.fullscreenElement` rather than trusting the resolved promise — the
+ * caller falls back to a CSS-fill when this returns false.
+ */
+async function requestFullscreenOn(node: FsEl | VideoEl | null): Promise<boolean> {
+  if (!node) return false;
+  const candidates: Array<{ fn?: () => Promise<void> | void; verifiable: boolean }> = [
+    { fn: document.fullscreenEnabled ? node.requestFullscreen?.bind(node) : undefined, verifiable: true },
+    { fn: (node as FsEl).webkitRequestFullscreen?.bind(node), verifiable: true },
+    { fn: (node as VideoEl).webkitEnterFullscreen?.bind(node), verifiable: false }, // iOS: no fullscreenElement
+  ];
+  for (const { fn, verifiable } of candidates) {
+    if (!fn) continue;
+    try {
+      const result = fn();
+      if (result && typeof (result as Promise<void>).then === "function") {
+        await Promise.race([result as Promise<void>, new Promise<void>((res) => setTimeout(res, 300))]);
+      }
+    } catch {
+      continue; // blocked / unsupported — try the next
+    }
+    if (!verifiable) return true; // native video FS can't be read back
+    if (currentFullscreenElement()) return true;
+  }
+  return currentFullscreenElement() != null;
+}
+
+/**
+ * Thin wrapper around hls.js. IPTV streams are predominantly live, so we join
+ * the live edge rather than seeking to an offset (design §8). Native HLS
+ * (Safari/iOS) is used directly when available.
+ *
+ * CORS: many IPTV streams require a permissive proxy / headers — surfaced via
+ * onError so the UI can tell the user (design R4).
+ */
+export function HlsPlayer({ src, onPlaying, onError, autoPlay = true, className }: HlsPlayerProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<VideoEl>(null);
+  const [loading, setLoading] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  // CSS-fill fallback when the host blocks the real Fullscreen API (iframe).
+  const [cssFs, setCssFs] = useState(false);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    setLoading(true);
+
+    let hls: Hls | undefined;
+    const onPlay = () => {
+      setLoading(false);
+      onPlaying?.();
+    };
+    video.addEventListener("playing", onPlay);
+
+    try {
+      if (Hls.isSupported()) {
+        // Conservative config: a blob-spawned worker and low-latency MSE are the
+        // most common triggers for a webview/GPU renderer crash on desktop hosts
+        // (black screen, no catchable JS error). Neither is needed for IPTV.
+        hls = new Hls({
+          liveSyncDurationCount: 3,
+          enableWorker: false,
+          lowLatencyMode: false,
+          backBufferLength: 30,
+        });
+        hls.loadSource(src);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          if (autoPlay) void video.play().catch(() => undefined);
+        });
+        hls.on(Hls.Events.ERROR, (_evt, data) => {
+          if (!data.fatal) return;
+          // Recovery calls can themselves throw if the instance is already gone;
+          // never let that escape the handler (it would crash the React tree).
+          try {
+            switch (data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                onError?.("Stream unreachable (network / CORS / permission). A proxy may be required.");
+                hls?.startLoad();
+                break;
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                onError?.("Stream media error.");
+                hls?.recoverMediaError();
+                break;
+              default:
+                onError?.("Stream cannot be played.");
+                hls?.destroy();
+            }
+          } catch {
+            hls?.destroy();
+          }
+        });
+      } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        video.src = src;
+        if (autoPlay) void video.play().catch(() => undefined);
+      } else {
+        onError?.("HLS is not supported by this browser.");
+      }
+    } catch (err) {
+      // Synchronous failure constructing/attaching hls (e.g. blocked worker,
+      // unavailable MediaSource): surface it, don't throw into render.
+      setLoading(false);
+      onError?.(err instanceof Error ? err.message : "Could not start playback.");
+    }
+
+    return () => {
+      video.removeEventListener("playing", onPlay);
+      hls?.destroy();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [src]);
+
+  // Track fullscreen state so the button icon reflects reality.
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(Boolean(currentFullscreenElement()));
+    const events = ["fullscreenchange", "webkitfullscreenchange"];
+    events.forEach((e) => document.addEventListener(e, onChange));
+    return () => events.forEach((e) => document.removeEventListener(e, onChange));
+  }, []);
+
+  // In CSS-fill mode, Escape exits (the native key works only for real fullscreen).
+  useEffect(() => {
+    if (!cssFs) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setCssFs(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [cssFs]);
+
+  const toggleFullscreen = useCallback(async () => {
+    // Exit whichever mode is active.
+    if (currentFullscreenElement()) {
+      const doc = document as FsDoc;
+      await (document.exitFullscreen?.() ?? doc.webkitExitFullscreen?.());
+      setCssFs(false);
+      return;
+    }
+    if (cssFs) {
+      setCssFs(false);
+      return;
+    }
+    // Real fullscreen (container, then <video>) only if it verifiably engages;
+    // otherwise CSS-fill the webview viewport (the Polkadot Desktop path).
+    const ok = (await requestFullscreenOn(containerRef.current)) || (await requestFullscreenOn(videoRef.current));
+    if (!ok) setCssFs(true);
+  }, [cssFs]);
+
+  const fsActive = isFullscreen || cssFs;
+
+  return (
+    <div className={className}>
+      <div
+        ref={containerRef}
+        className={
+          cssFs
+            ? "group fixed inset-0 z-[60] flex items-center justify-center bg-black"
+            : isFullscreen
+              ? // Real fullscreen: let the UA size the :fullscreen element; we only
+                // center the video (no `position`, so the UA fill rule applies).
+                "group flex items-center justify-center bg-black"
+              : "group relative bg-black"
+        }
+      >
+        <video
+          ref={videoRef}
+          controls
+          playsInline
+          className={
+            fsActive
+              ? // Fill the screen (scale up), not the intrinsic 720p/1080p box.
+                "h-full w-full object-contain bg-black"
+              : "aspect-video w-full rounded-[12px] bg-black"
+          }
+        />
+        <button
+          type="button"
+          onClick={() => void toggleFullscreen()}
+          aria-label={fsActive ? "Exit fullscreen" : "Fullscreen"}
+          className={`absolute right-2 top-2 rounded-[8px] bg-black/55 p-2 text-white transition-opacity hover:bg-black/75 focus-visible:opacity-100 ${
+            cssFs ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+          }`}
+        >
+          {fsActive ? <Minimize size={18} /> : <Maximize size={18} />}
+        </button>
+      </div>
+      {loading && !cssFs && (
+        <p className="text-fg-secondary mt-2 text-center text-sm" aria-live="polite">
+          Connecting to stream…
+        </p>
+      )}
+    </div>
+  );
+}

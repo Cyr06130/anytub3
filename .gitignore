@@ -1,0 +1,21 @@
+# Dependencies
+node_modules
+
+# Build output
+build
+dist
+.vite
+*.car
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Test / e2e artifacts
+playwright-report
+test-results
+
+# Local env & editor
+*.local
+.env
+.env.*
+.DS_Store

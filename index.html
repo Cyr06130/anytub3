@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>AnyTub3</title>
+    <meta name="description" content="Decentralized .dot IPTV with inter-host continuity" />
+    <!--
+      Content-Security-Policy (design doc R3 / checklist):
+      - default-src 'self'
+      - HLS streams + logos are http(s) only (sanitized in m3u.ts); we allow them via media/img/connect.
+      - hls.js spawns workers from blob: URLs → worker-src blob:.
+      - 'unsafe-inline' on style is required by Tailwind/TrUI injected styles.
+      In production behind the host, tighten further as the host CSP allows.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' https: wss:; frame-ancestors *"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
