@@ -36,13 +36,17 @@ import {
 } from "@/lib/share";
 import { loadLibraryIndex } from "@/lib/bulletin";
 import { parseM3U } from "@/lib/m3u";
-import { SAMPLE_M3U } from "@/lib/sample";
+import { SAMPLE_M3U, SAMPLE_EPG_URL, buildSampleXmltv } from "@/lib/sample";
 
 // ── State shape ──────────────────────────────────────────────────────────────
 
 export type Screen =
   | { name: "library" }
-  | { name: "player"; playlistId: string; channelId: string };
+  | { name: "player"; playlistId: string; channelId: string }
+  | { name: "add" }
+  | { name: "edit"; playlistId: string }
+  | { name: "share"; playlistId: string }
+  | { name: "epg"; playlistId: string; channelId: string };
 
 export type AppState = {
   ready: boolean;
@@ -87,6 +91,40 @@ function subscribe(l: () => void): () => void {
 }
 export function useApp(): AppState {
   return useSyncExternalStore(subscribe, getState, getState);
+}
+
+// ── Navigation ───────────────────────────────────────────────────────────────
+// Screens form a stack so the TV Back key (and the UI back buttons) can retrace
+// the user's path. `screen` stays in AppState (single render source); the stack
+// only remembers where "back" leads. Teleports (cross-host resume/handoff,
+// forced returns on delete/edit) clear it — a context switch has no "back".
+
+let navStack: Screen[] = [];
+
+export function navigate(screen: Screen): void {
+  navStack.push(state.screen);
+  setState({ screen });
+}
+
+/**
+ * Go back one screen. Returns false when already at the library root — the
+ * caller then leaves the key to the platform (webOS exits the app).
+ */
+export function goBack(): boolean {
+  if (state.screen.name === "player") stopNpHeartbeat();
+  const prev = navStack.pop();
+  if (prev) {
+    setState({ screen: prev });
+    return true;
+  }
+  if (state.screen.name === "library") return false;
+  setState({ screen: { name: "library" } }); // defensive: screen without history
+  return true;
+}
+
+function resetScreen(screen: Screen, stack: Screen[] = []): void {
+  navStack = stack;
+  setState({ screen });
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -149,12 +187,18 @@ export async function bootstrap(): Promise<void> {
     // Off-host: expose a few hooks so the share/receive path can be demoed and
     // e2e-tested without a second user or a real host.
     if (!bridge.inHost && typeof window !== "undefined") {
+      const { setHttpFixture } = await import("@/lib/bridge/mock");
+      // Demo guide for the sample playlist, anchored on "now" so there's always
+      // a current programme. The mock bridge serves it for SAMPLE_EPG_URL — no
+      // network in demo mode.
+      setHttpFixture(SAMPLE_EPG_URL, buildSampleXmltv());
       (window as unknown as { __anytub3?: unknown }).__anytub3 = {
         getState,
         simulateReceiveSample,
         simulateShareCode,
         simulateMaliciousShareCode,
         republishHead,
+        setHttpFixture, // e2e: seed deterministic EPG / directory responses
       };
     }
 
@@ -234,6 +278,7 @@ async function mergeIndex(index: {
         entries: body.entries,
         cid: meta.cid,
         sourceCid: meta.sourceCid,
+        ...(body.epgUrl ? { epgUrl: body.epgUrl } : {}),
         addedAt: Date.now(),
       });
     } catch (e) {
@@ -259,8 +304,9 @@ function resumeNowPlaying(): void {
   const pl = findByCid(np.playlistCid);
   if (!pl) return; // playlist not (yet) restored
   setState({ nowPlayingChannelId: np.channelId, nowPlayingTs: np.timestamp });
-  // Optimistic: jump straight to the player on the last channel.
-  setState({ screen: { name: "player", playlistId: pl.id, channelId: np.channelId } });
+  // Optimistic: jump straight to the player on the last channel. Seed the stack
+  // with the library so Back from a cold-resumed player lands somewhere sane.
+  resetScreen({ name: "player", playlistId: pl.id, channelId: np.channelId }, [{ name: "library" }]);
 }
 
 function handleRemoteNowPlaying(np: SharePointerlessNowPlaying): void {
@@ -271,11 +317,9 @@ function handleRemoteNowPlaying(np: SharePointerlessNowPlaying): void {
     setState({ nowPlayingTs: np.timestamp });
     return;
   }
-  setState({
-    nowPlayingChannelId: np.channelId,
-    nowPlayingTs: np.timestamp,
-    screen: { name: "player", playlistId: pl.id, channelId: np.channelId },
-  });
+  setState({ nowPlayingChannelId: np.channelId, nowPlayingTs: np.timestamp });
+  // A handoff is a context switch: clobber whatever sub-screen was open.
+  resetScreen({ name: "player", playlistId: pl.id, channelId: np.channelId }, [{ name: "library" }]);
   const ch = pl.entries.find((c) => c.id === np.channelId);
   toastInfo({ title: "Resumed from another device", description: ch?.name ?? pl.title });
 }
@@ -284,7 +328,11 @@ type SharePointerlessNowPlaying = { playlistCid: string; channelId: string; time
 
 // ── Actions ──────────────────────────────────────────────────────────────────
 
-export async function addPlaylist(title: string, entries: Channel[]): Promise<void> {
+export async function addPlaylist(
+  title: string,
+  entries: Channel[],
+  opts?: { epgUrl?: string },
+): Promise<void> {
   if (!entries.length) {
     toastError({ title: "Empty playlist", description: "No valid channel found." });
     return;
@@ -293,6 +341,7 @@ export async function addPlaylist(title: string, entries: Channel[]): Promise<vo
     id: crypto.randomUUID(),
     title,
     entries,
+    ...(opts?.epgUrl ? { epgUrl: opts.epgUrl } : {}),
     addedAt: Date.now(),
   };
   setState({ playlists: [...state.playlists, playlist] });
@@ -316,21 +365,22 @@ export async function addPlaylistFromUrl(url: string): Promise<Channel[]> {
   }
   const res = await fetch(trimmed);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const { parseM3U, deriveTitle } = await import("@/lib/m3u");
+  const { parseM3U, parseM3UHeader, deriveTitle } = await import("@/lib/m3u");
   const text = await res.text();
   const entries = parseM3U(text);
-  await addPlaylist(deriveTitle(url, entries.length), entries);
+  // Pick up the provider's EPG guide (url-tvg) advertised in the m3u header.
+  const { epgUrl } = parseM3UHeader(text);
+  await addPlaylist(deriveTitle(url, entries.length), entries, { epgUrl });
   return entries;
 }
 
 export async function tune(playlistId: string, channel: Channel): Promise<void> {
   const pl = findPlaylist(playlistId);
-  if (!pl?.cid) {
-    // not persisted yet — still play locally, just can't hand off
-    setState({ screen: { name: "player", playlistId, channelId: channel.id }, nowPlayingChannelId: channel.id });
-    return;
-  }
+  // Zapping must not grow the back stack: replace in place when already on the
+  // player, push only when coming from elsewhere (library, guide).
+  if (state.screen.name !== "player") navStack.push(state.screen);
   setState({ screen: { name: "player", playlistId, channelId: channel.id }, nowPlayingChannelId: channel.id });
+  if (!pl?.cid) return; // not persisted yet — still play locally, just can't hand off
   try {
     const np = await publishNowPlaying({ playlistCid: pl.cid, channelId: channel.id });
     setState({ nowPlayingTs: np.timestamp });
@@ -343,7 +393,7 @@ export async function tune(playlistId: string, channel: Channel): Promise<void> 
 
 export function goLibrary(): void {
   stopNpHeartbeat();
-  setState({ screen: { name: "library" } });
+  resetScreen({ name: "library" });
 }
 
 /**
@@ -367,7 +417,8 @@ export async function updatePlaylist(
   const s = state.screen;
   if (s.name === "player" && s.playlistId === id && !updated.entries.some((c) => c.id === s.channelId)) {
     stopNpHeartbeat();
-    setState({ screen: { name: "library" }, nowPlayingChannelId: null });
+    setState({ nowPlayingChannelId: null });
+    resetScreen({ name: "library" });
   }
 
   try {
@@ -380,13 +431,40 @@ export async function updatePlaylist(
   }
 }
 
+/**
+ * Attach (or change) the XMLTV EPG source of a playlist. Bulletin is immutable,
+ * so this re-stores the body under a new CID and republishes the library index —
+ * the EPG source then persists and syncs across hosts. Quiet (no toast): it's a
+ * background refinement triggered from the guide panel.
+ */
+export async function setPlaylistEpgUrl(id: string, epgUrl: string): Promise<void> {
+  const pl = findPlaylist(id);
+  if (!pl || !/^https?:\/\//i.test(epgUrl)) return;
+  const updated: Playlist = { ...pl, epgUrl };
+  setState({ playlists: state.playlists.map((p) => (p.id === id ? updated : p)) });
+  try {
+    const { cid } = await storePlaylist(updated);
+    setState({ playlists: state.playlists.map((p) => (p.id === id ? { ...updated, cid } : p)) });
+    await persistLibrary();
+  } catch (e) {
+    console.warn("[AnyTub3] setPlaylistEpgUrl:", e);
+  }
+}
+
 export async function deletePlaylist(id: string): Promise<void> {
   const pl = findPlaylist(id);
   if (!pl) return;
   const s = state.screen;
   if (s.name === "player" && s.playlistId === id) {
     stopNpHeartbeat();
-    setState({ screen: { name: "library" }, nowPlayingChannelId: null });
+    setState({ nowPlayingChannelId: null });
+    resetScreen({ name: "library" });
+  } else if (s.name !== "library" && "playlistId" in s && s.playlistId === id) {
+    // On a sub-screen (edit/share/epg) of the deleted playlist.
+    resetScreen({ name: "library" });
+  } else {
+    // Back must never land on a dead playlist's screen.
+    navStack = navStack.filter((sc) => !("playlistId" in sc && sc.playlistId === id));
   }
   setState({ playlists: state.playlists.filter((p) => p.id !== id) });
   await persistLibrary();
@@ -527,6 +605,7 @@ async function importSharedPointer(ptr: SharePointer): Promise<boolean> {
       title: ptr.title || body.title,
       entries: body.entries,
       sourceCid: ptr.playlistCid,
+      ...(body.epgUrl ? { epgUrl: body.epgUrl } : {}),
       addedAt: Date.now(),
     };
     // …then re-store it under OUR OWN content key. The shared blob is encrypted

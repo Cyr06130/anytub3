@@ -204,6 +204,17 @@ export async function createRealBridge(): Promise<HostBridge> {
       throw new Error("Bulletin read unavailable (preimage manager missing)");
     },
 
+    async httpGet(url: string) {
+      // Enforce the scheme here too (not just in callers): never fetch
+      // javascript:/file:/data: URLs. In-host, this fetch is subject to the
+      // host's external-access permission (the user may be prompted), like the
+      // external streams.
+      if (!/^https?:\/\//i.test(url)) throw new Error("Only http(s) URLs are supported.");
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.text();
+    },
+
     channel(topic2: string): ChannelLike {
       let ch = channels.get(topic2);
       if (ch) return ch;

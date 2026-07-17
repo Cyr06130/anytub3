@@ -29,6 +29,12 @@ export type Playlist = {
    * remembers the source purely to de-dupe re-imports of the same share.
    */
   sourceCid?: string;
+  /**
+   * XMLTV EPG source for this playlist (the `url-tvg`/`x-tvg-url` from the m3u
+   * header, or user-supplied). Fetched lazily, only when the user opens a
+   * channel's guide. http(s) only. See lib/epg.ts.
+   */
+  epgUrl?: string;
   addedAt: number;
 };
 
@@ -38,6 +44,8 @@ export type PlaylistBody = {
   id: string;
   title: string;
   entries: Channel[];
+  /** Persisted EPG source so it survives a cold restore / cross-host sync. */
+  epgUrl?: string;
 };
 
 /** Library index — the mutable head pointer lives in `library-head` (Statement Store). */
@@ -79,4 +87,53 @@ export type SharePointer = {
   /** Content key bytes so the recipient can decrypt the shared playlist. */
   key: number[];
   title: string;
+};
+
+// ── EPG (Electronic Program Guide) ───────────────────────────────────────────
+// Modeled on the iptv-org data model: the channel `id` (== Channel.tvgId ==
+// XMLTV `<channel id>`) is the join key. iptv-org/api gives the channel
+// directory + guide pointers (metadata only); the actual programmes come from an
+// XMLTV feed (the playlist's `url-tvg`). All external EPG data is untrusted and
+// sanitized before it reaches state (lib/epg.ts), exactly like shared playlists.
+
+/** One programme — an XMLTV `<programme>` element, sanitized. */
+export type Programme = {
+  /** XMLTV `channel` attribute — matches Channel.tvgId. */
+  channelId: string;
+  /** Epoch ms. */
+  start: number;
+  /** Epoch ms. */
+  stop: number;
+  /** Rendered by React (escaped) — never innerHTML. */
+  title: string;
+  desc?: string;
+  category?: string;
+  /** Programme icon — http(s) only, else undefined (XSS hardening). */
+  icon?: string;
+};
+
+/** A single channel's guide, computed on demand for the EPG panel. */
+export type ChannelEpg = {
+  channelId: string;
+  /** Programme airing at the reference time, if any. */
+  now?: Programme;
+  /** The programme right after `now`, if any. */
+  next?: Programme;
+  /** `now` + upcoming programmes, sorted by start, capped. */
+  upcoming: Programme[];
+  /** XMLTV source the programmes were read from. */
+  source: string;
+  /** Optional enrichment resolved from the iptv-org channel directory. */
+  meta?: { name?: string; logo?: string; categories?: string[] };
+};
+
+/** iptv-org `channels.json` entry (subset we use to resolve/enrich a channel). */
+export type DirectoryChannel = {
+  id: string;
+  name: string;
+  alt_names?: string[];
+  country?: string;
+  categories?: string[];
+  /** Closed channels are skipped when resolving a missing tvg-id. */
+  closed?: string | null;
 };

@@ -44,6 +44,14 @@ export interface HostBridge {
   cloudStore(bytes: Uint8Array): Promise<string>; // → CID
   cloudFetch(cid: string): Promise<Uint8Array>;
 
+  /**
+   * Fetch a public http(s) resource as text — used for EPG (XMLTV guides + the
+   * iptv-org channel directory). Routed through the bridge so the real host can
+   * apply its external-access policy and the mock can serve deterministic
+   * fixtures for e2e. http(s) only; rejects other schemes.
+   */
+  httpGet(url: string): Promise<string>;
+
   // ── Statement Store channels (ephemeral, last-write-wins) ──
   channel(topic2: string): ChannelLike;
 

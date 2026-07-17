@@ -55,6 +55,45 @@ inter-host continuity (resume + live handoff).
 
 ---
 
+## TV mode (LG webOS)
+
+The UI is remote-friendly end to end: **no modals** (every surface is a screen with
+a Back affordance), D-pad focus navigation (`src/lib/tv-input.ts` + `src/lib/tv-nav.ts`),
+and a 10-foot theme. TV mode activates on the webOS user agent (`Web0S`) or with the
+`?tv=1` query override:
+
+```bash
+npm run dev          # then open http://localhost:5173/?tv=1 and drive with the keyboard
+```
+
+Keyboard/remote mapping: arrows move focus (geometric, DOM focus is the source of
+truth), OK/Enter activates, **Back** (keyCode 461 / `GoBack` / Escape) pops the screen
+stack — in the player it zaps (Up/Down), shows the overlay (OK) and returns to the
+library; media keys play/pause. `html.tv` scales the root font to 24px (the whole UI,
+tr-ui included, is rem-based) and pads for overscan. `e2e/tv.spec.ts` drives all of
+this keyboard-only.
+
+### Checklist on a real TV (open the deployed/preview URL in the webOS browser)
+
+1. **Back key reaches the page** — screens pop, and from the library root Back leaves
+   the app. If the browser chrome swallows keyCode 461, the `popstate` sentinel in
+   `tv-input.ts` must kick in (verify both paths).
+2. **OSK**: OK on a text field opens the on-screen keyboard; the first Back dismisses
+   it without navigating, the second navigates.
+3. **Focus ring** legible at ~3 m in both light and dark themes.
+4. **Playback**: the sample HLS streams play (hls.js/MSE path) and zapping stays < 2 s;
+   zap ~20 channels in a row — no renderer crash (`enableWorker:false` is already set).
+5. **Magic Remote pointer**: hover + click work everywhere; moving the cursor over the
+   player wakes the overlay.
+6. **Geometry**: nothing clipped in the overscan margins at 1920×1080, no horizontal
+   scroll.
+7. **Styling on older models**: JS is transpiled to Chrome 79 (webOS 6/2021,
+   `build.target` in `vite.config.ts`), but Tailwind v4's CSS (`color-mix`,
+   `@property`) officially targets Chrome 111+ — expect minor color/ring degradation
+   below webOS 24; layout should hold.
+
+---
+
 ## Architecture
 
 The application code **never** depends directly on the host SDK: everything goes through

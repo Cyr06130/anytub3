@@ -102,6 +102,31 @@ export function sanitizeEntries(raw: unknown): Channel[] {
   return out;
 }
 
+/**
+ * Read the EPG source URL from the `#EXTM3U` header, if present. IPTV providers
+ * advertise their XMLTV guide there as `url-tvg`, `x-tvg-url` or `tvg-url` (the
+ * value may be a comma-separated list — we take the first http(s) URL). This is
+ * the primary, decentralized EPG source: it travels with the playlist, no
+ * central dependency. Returns undefined when absent or non-http(s).
+ */
+export function parseM3UHeader(text: string): { epgUrl?: string } {
+  // The header is (conventionally) the first line; scan the first few lines to
+  // tolerate leading blanks/BOM and a misplaced #EXTM3U.
+  const lines = text.split(/\r?\n/, 8);
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line.startsWith("#EXTM3U")) continue;
+    for (const key of ["url-tvg", "x-tvg-url", "tvg-url"]) {
+      const value = attr(line, key);
+      if (!value) continue;
+      const first = value.split(",").map((s) => s.trim()).find((u) => SAFE_URL.test(u));
+      if (first) return { epgUrl: first };
+    }
+    break; // header found; no need to scan further
+  }
+  return {};
+}
+
 /** Derive a human title for a parsed playlist (from source URL or fallback). */
 export function deriveTitle(source: string | undefined, channelCount: number): string {
   if (source && SAFE_URL.test(source)) {

@@ -38,6 +38,8 @@ export async function storePlaylist(playlist: Playlist): Promise<{ cid: string; 
     id: playlist.id,
     title: playlist.title,
     entries: playlist.entries,
+    // Persist the EPG source so it survives a cold restore / cross-host sync.
+    ...(playlist.epgUrl && /^https?:\/\//i.test(playlist.epgUrl) ? { epgUrl: playlist.epgUrl } : {}),
   };
   const bridge = await getBridge();
   const cid = await bridge.cloudStore(encryptJson(body, key));
@@ -62,6 +64,8 @@ export async function loadPlaylist(cid: string, key: Uint8Array): Promise<Playli
     id: typeof body.id === "string" ? body.id : "",
     title: typeof body.title === "string" ? body.title : "",
     entries: sanitizeEntries(body.entries),
+    // EPG source is a plain http(s) URL or nothing — validate the scheme too.
+    ...(typeof body.epgUrl === "string" && /^https?:\/\//i.test(body.epgUrl) ? { epgUrl: body.epgUrl } : {}),
   };
 }
 

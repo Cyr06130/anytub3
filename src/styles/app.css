@@ -2,6 +2,9 @@
 @import "@novasamatech/tr-ui/styles.css";
 @config "../../tailwind.config.ts";
 
+/* `tv:` variant for one-off TV tweaks in app markup (html.tv is set at boot). */
+@custom-variant tv (&:where(.tv, .tv *));
+
 /* TrUI's styles.css owns the page background: `body { background-color:
    hsl(var(--background)) }`, switched by the `.dark` class on <html> (toggled by
    ThemeProvider.setMode). We must NOT override `background` here, or the theme
@@ -19,4 +22,45 @@ body {
   color: hsl(var(--foreground));
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+/* Keyboard/desktop focus for the app's raw buttons (channel rows…) — tr-ui
+   components already ship their own focus ring. */
+:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+/* ── TV mode (webOS) ──────────────────────────────────────────────────────────
+   The whole UI — tr-ui internals included — is rem-based, so scaling the root
+   font-size is the entire 10-foot theme: text, control heights, paddings and
+   radii grow together. Tailwind breakpoints stay pinned to 16px per the CSS
+   spec, so the player keeps its `lg:` side-by-side layout at 1080p/2160p. */
+html.tv {
+  font-size: 24px;
+}
+
+/* Couch-visible focus ring. Plain `:focus`, not `:focus-visible`: D-pad focus
+   is programmatic and must ALWAYS be visible (and older TV Chromium lacks
+   :focus-visible entirely). */
+html.tv :focus {
+  outline: 4px solid hsl(var(--ring));
+  outline-offset: 3px;
+}
+
+/* Overscan-safe margins: TVs may crop ~2-5% at the edges. */
+html.tv .app-shell {
+  padding: 3.5vh 3.5vw;
+}
+
+/* Older TV Chromium (<108) has no dvh units — fall back to vh so the shell
+   doesn't collapse. Declared after the Tailwind import, so when dvh IS
+   supported the utility still wins via @supports. */
+@supports not (min-height: 100dvh) {
+  .min-h-dvh {
+    min-height: 100vh;
+  }
+  .min-h-\[58dvh\] {
+    min-height: 58vh;
+  }
 }

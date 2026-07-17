@@ -5,6 +5,9 @@ import { ThemeProvider, Toaster, TooltipProvider } from "@novasamatech/tr-ui";
 import { defaultTheme } from "@novasamatech/tr-ui/themes";
 import { App } from "./App";
 import { HostThemeBridge } from "./HostThemeBridge";
+import { initTvMode } from "./lib/tv";
+
+initTvMode();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

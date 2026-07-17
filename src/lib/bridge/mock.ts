@@ -34,6 +34,19 @@ function b64decode(s: string): Uint8Array {
   return out;
 }
 
+// Deterministic httpGet fixtures (e2e + demo): exact-URL → response body. A
+// registered fixture short-circuits the network so EPG tests never flake on a
+// live host. Stored on globalThis so a Playwright init script can seed it before
+// the app boots. Anything not registered falls through to a real fetch (so the
+// demo can still pull a real provider's XMLTV when CORS allows).
+const HTTP_FIXTURES: Map<string, string> = ((
+  globalThis as unknown as { __ANYTUB3_HTTP_FIXTURES__?: Map<string, string> }
+).__ANYTUB3_HTTP_FIXTURES__ ??= new Map());
+
+export function setHttpFixture(url: string, body: string): void {
+  HTTP_FIXTURES.set(url, body);
+}
+
 function getOrCreateSeed(): Uint8Array {
   const existing = localStorage.getItem(SEED_KEY);
   if (existing) return b64decode(existing);
@@ -150,6 +163,17 @@ export function createMockBridge(): HostBridge {
       const raw = localStorage.getItem(CLOUD_PREFIX + cid);
       if (!raw) throw new Error(`Mock cloud: CID not found ${cid}`);
       return b64decode(raw);
+    },
+
+    async httpGet(url: string) {
+      const fixture = HTTP_FIXTURES.get(url);
+      if (fixture !== undefined) return fixture;
+      // No fixture → behave like the real bridge (lets the demo fetch a real
+      // provider's guide when CORS permits).
+      if (!/^https?:\/\//i.test(url)) throw new Error("Only http(s) URLs are supported.");
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.text();
     },
 
     channel(topic2: string) {

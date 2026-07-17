@@ -1,19 +1,13 @@
 import { useState } from "react";
-import { Card, ListItem, Empty, Badge, Button, DropdownMenu, AlertDialog } from "@novasamatech/tr-ui";
-import { Tv, Plus, Share2, MoreVertical, Pencil, Trash2 } from "lucide-react";
-import type { Playlist } from "@/types";
-import { deletePlaylist, tune, useApp } from "@/state/store";
-import { EditPlaylist } from "@/screens/EditPlaylist";
+import { Card, ListItem, Empty, Badge, Button } from "@novasamatech/tr-ui";
+import { Tv, Plus, Share2, Pencil, Trash2 } from "lucide-react";
+import { deletePlaylist, navigate, tune, useApp } from "@/state/store";
+import { EpgButton } from "@/components/EpgPanel";
 
-type LibraryProps = {
-  onAdd: () => void;
-  onShare: (playlistId: string) => void;
-};
-
-export function Library({ onAdd, onShare }: LibraryProps) {
+export function Library() {
   const { playlists, loading, nowPlayingChannelId } = useApp();
-  const [editing, setEditing] = useState<Playlist | null>(null);
-  const [deleting, setDeleting] = useState<Playlist | null>(null);
+  // Playlist id awaiting delete confirmation (inline — no modal, TV friendly).
+  const [confirming, setConfirming] = useState<string | null>(null);
 
   if (loading) {
     return (
@@ -39,7 +33,7 @@ export function Library({ onAdd, onShare }: LibraryProps) {
             </Empty.Description>
           </Empty.Header>
           <Empty.Content>
-            <Button size="lg" onClick={onAdd}>
+            <Button size="lg" onClick={() => navigate({ name: "add" })}>
               <Plus /> Add a playlist
             </Button>
           </Empty.Content>
@@ -52,7 +46,7 @@ export function Library({ onAdd, onShare }: LibraryProps) {
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h2 className="text-fg-primary text-lg font-semibold">My channels</h2>
-        <Button size="sm" variant="secondary" onClick={onAdd}>
+        <Button size="sm" variant="secondary" onClick={() => navigate({ name: "add" })}>
           <Plus /> Add
         </Button>
       </div>
@@ -73,79 +67,80 @@ export function Library({ onAdd, onShare }: LibraryProps) {
                   variant="ghost"
                   aria-label="Share playlist"
                   disabled={!pl.cid}
-                  onClick={() => onShare(pl.id)}
+                  onClick={() => navigate({ name: "share", playlistId: pl.id })}
                 >
                   <Share2 />
                 </Button>
-                <DropdownMenu>
-                  <DropdownMenu.Trigger asChild>
-                    <Button size="icon-sm" variant="ghost" aria-label="Playlist actions">
-                      <MoreVertical />
-                    </Button>
-                  </DropdownMenu.Trigger>
-                  <DropdownMenu.Content>
-                    <DropdownMenu.Item onSelect={() => setEditing(pl)}>
-                      <Pencil /> Edit
-                    </DropdownMenu.Item>
-                    <DropdownMenu.Item variant="destructive" onSelect={() => setDeleting(pl)}>
-                      <Trash2 /> Delete
-                    </DropdownMenu.Item>
-                  </DropdownMenu.Content>
-                </DropdownMenu>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label="Edit playlist"
+                  onClick={() => navigate({ name: "edit", playlistId: pl.id })}
+                >
+                  <Pencil />
+                </Button>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label="Delete playlist"
+                  onClick={() => setConfirming(pl.id)}
+                >
+                  <Trash2 />
+                </Button>
               </div>
             </div>
+            {confirming === pl.id && (
+              <div className="border-border-secondary mt-2 flex flex-wrap items-center justify-between gap-2 rounded-[8px] border p-2">
+                <span className="text-fg-primary text-sm font-medium">Delete playlist?</span>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="secondary" onClick={() => setConfirming(null)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => {
+                      setConfirming(null);
+                      void deletePlaylist(pl.id);
+                    }}
+                  >
+                    Delete
+                  </Button>
+                </div>
+              </div>
+            )}
           </Card.Header>
           <Card.Content>
             <div className="-mx-2 flex max-h-80 flex-col overflow-y-auto">
               {pl.entries.map((ch) => (
-                <button
+                <div
                   key={ch.id}
-                  onClick={() => void tune(pl.id, ch)}
-                  className="hover:bg-bg-selection-container-hover w-full rounded-[8px] text-left"
+                  className="hover:bg-bg-selection-container-hover focus-within:bg-bg-selection-container-hover flex items-center gap-1 rounded-[8px] pr-2"
                 >
-                  <ListItem
-                    variant="icon-label"
-                    icon={<Tv />}
-                    title={ch.name}
-                    description={ch.group}
-                    trailingLabel={
-                      ch.id === nowPlayingChannelId ? <Badge variant="primary">Live</Badge> : undefined
-                    }
+                  <button
+                    onClick={() => void tune(pl.id, ch)}
+                    data-focus-key={ch.id}
+                    className="min-w-0 flex-1 text-left"
+                  >
+                    <ListItem
+                      variant="icon-label"
+                      icon={<Tv />}
+                      title={ch.name}
+                      description={ch.group}
+                      trailingLabel={
+                        ch.id === nowPlayingChannelId ? <Badge variant="primary">Live</Badge> : undefined
+                      }
+                    />
+                  </button>
+                  <EpgButton
+                    onClick={() => navigate({ name: "epg", playlistId: pl.id, channelId: ch.id })}
                   />
-                </button>
+                </div>
               ))}
             </div>
           </Card.Content>
         </Card>
       ))}
-
-      <EditPlaylist open={editing !== null} onOpenChange={(o) => !o && setEditing(null)} playlist={editing} />
-
-      <AlertDialog open={deleting !== null} onOpenChange={(o) => !o && setDeleting(null)}>
-        <AlertDialog.Content>
-          <AlertDialog.Header>
-            <AlertDialog.Title>Delete playlist?</AlertDialog.Title>
-            <AlertDialog.Description>
-              "{deleting?.title}" will be removed from your library. The channels remain retrievable from Bulletin as long as you know the CID.
-            </AlertDialog.Description>
-          </AlertDialog.Header>
-          <AlertDialog.Footer>
-            <div className="flex w-full flex-wrap justify-center gap-2">
-              <AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
-              <AlertDialog.Action
-                variant="destructive"
-                onClick={() => {
-                  const target = deleting;
-                  setDeleting(null);
-                  if (target) void deletePlaylist(target.id);
-                }}
-              >
-                Delete
-              </AlertDialog.Action>
-            </div>
-          </AlertDialog.Footer>
-        </AlertDialog.Content>
-      </AlertDialog>
     </div>
   );
 }

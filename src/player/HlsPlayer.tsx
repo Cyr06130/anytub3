@@ -1,6 +1,14 @@
 import Hls from "hls.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Maximize, Minimize } from "lucide-react";
+import { pushKeyHandler } from "@/lib/tv-input";
+
+/** Imperative playback surface for the TV overlay's media keys. */
+export type HlsPlayerApi = {
+  play(): void;
+  pause(): void;
+  toggle(): void;
+};
 
 type HlsPlayerProps = {
   src: string;
@@ -9,6 +17,14 @@ type HlsPlayerProps = {
   onError?: (message: string) => void;
   autoPlay?: boolean;
   className?: string;
+  /** Native control bar (off on TV — it steals the D-pad arrows). */
+  controls?: boolean;
+  /** Fullscreen toggle button (pointless on TV: the stage is full-bleed). */
+  fullscreenButton?: boolean;
+  /** Fill the parent (TV full-bleed stage) instead of the aspect-video box. */
+  fill?: boolean;
+  /** Receives the playback API for imperative play/pause (media keys). */
+  apiRef?: React.MutableRefObject<HlsPlayerApi | null>;
 };
 
 type VideoEl = HTMLVideoElement & {
@@ -71,13 +87,40 @@ async function requestFullscreenOn(node: FsEl | VideoEl | null): Promise<boolean
  * CORS: many IPTV streams require a permissive proxy / headers — surfaced via
  * onError so the UI can tell the user (design R4).
  */
-export function HlsPlayer({ src, onPlaying, onError, autoPlay = true, className }: HlsPlayerProps) {
+export function HlsPlayer({
+  src,
+  onPlaying,
+  onError,
+  autoPlay = true,
+  className,
+  controls = true,
+  fullscreenButton = true,
+  fill = false,
+  apiRef,
+}: HlsPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<VideoEl>(null);
   const [loading, setLoading] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   // CSS-fill fallback when the host blocks the real Fullscreen API (iframe).
   const [cssFs, setCssFs] = useState(false);
+
+  useEffect(() => {
+    if (!apiRef) return;
+    apiRef.current = {
+      play: () => void videoRef.current?.play().catch(() => undefined),
+      pause: () => videoRef.current?.pause(),
+      toggle: () => {
+        const v = videoRef.current;
+        if (!v) return;
+        if (v.paused) void v.play().catch(() => undefined);
+        else v.pause();
+      },
+    };
+    return () => {
+      apiRef.current = null;
+    };
+  }, [apiRef]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -157,14 +200,15 @@ export function HlsPlayer({ src, onPlaying, onError, autoPlay = true, className 
     return () => events.forEach((e) => document.removeEventListener(e, onChange));
   }, []);
 
-  // In CSS-fill mode, Escape exits (the native key works only for real fullscreen).
+  // In CSS-fill mode, Back/Escape exits (the native key only works for real
+  // fullscreen). Pushed on the input stack so it wins over screen-back.
   useEffect(() => {
     if (!cssFs) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setCssFs(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return pushKeyHandler((key) => {
+      if (key !== "back") return false;
+      setCssFs(false);
+      return true;
+    });
   }, [cssFs]);
 
   const toggleFullscreen = useCallback(async () => {
@@ -186,6 +230,7 @@ export function HlsPlayer({ src, onPlaying, onError, autoPlay = true, className 
   }, [cssFs]);
 
   const fsActive = isFullscreen || cssFs;
+  const fillMode = fsActive || fill;
 
   return (
     <div className={className}>
@@ -198,32 +243,36 @@ export function HlsPlayer({ src, onPlaying, onError, autoPlay = true, className 
               ? // Real fullscreen: let the UA size the :fullscreen element; we only
                 // center the video (no `position`, so the UA fill rule applies).
                 "group flex items-center justify-center bg-black"
-              : "group relative bg-black"
+              : fill
+                ? "group relative h-full bg-black"
+                : "group relative bg-black"
         }
       >
         <video
           ref={videoRef}
-          controls
+          controls={controls}
           playsInline
           className={
-            fsActive
+            fillMode
               ? // Fill the screen (scale up), not the intrinsic 720p/1080p box.
                 "h-full w-full object-contain bg-black"
               : "aspect-video w-full rounded-[12px] bg-black"
           }
         />
-        <button
-          type="button"
-          onClick={() => void toggleFullscreen()}
-          aria-label={fsActive ? "Exit fullscreen" : "Fullscreen"}
-          className={`absolute right-2 top-2 rounded-[8px] bg-black/55 p-2 text-white transition-opacity hover:bg-black/75 focus-visible:opacity-100 ${
-            cssFs ? "opacity-100" : "opacity-0 group-hover:opacity-100"
-          }`}
-        >
-          {fsActive ? <Minimize size={18} /> : <Maximize size={18} />}
-        </button>
+        {fullscreenButton && (
+          <button
+            type="button"
+            onClick={() => void toggleFullscreen()}
+            aria-label={fsActive ? "Exit fullscreen" : "Fullscreen"}
+            className={`absolute right-2 top-2 rounded-[8px] bg-black/55 p-2 text-white transition-opacity hover:bg-black/75 focus-visible:opacity-100 ${
+              cssFs ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+            }`}
+          >
+            {fsActive ? <Minimize size={18} /> : <Maximize size={18} />}
+          </button>
+        )}
       </div>
-      {loading && !cssFs && (
+      {loading && !cssFs && !fill && (
         <p className="text-fg-secondary mt-2 text-center text-sm" aria-live="polite">
           Connecting to stream…
         </p>

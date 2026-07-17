@@ -1,11 +1,17 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 import { ProductHeader, Badge, Button, Tooltip, useTheme, toastError } from "@novasamatech/tr-ui";
 import { Moon, Sun } from "lucide-react";
 import anytubIcon from "@/assets/anytub3.svg";
-import { bootstrap, goLibrary, useApp } from "@/state/store";
+import { bootstrap, goBack, goLibrary, useApp } from "@/state/store";
+import type { Screen } from "@/state/store";
+import { isTv } from "@/lib/tv";
+import { installTvInput, pushKeyHandler } from "@/lib/tv-input";
+import { focusMemory, focusScreen, installTvNav, screenKeyOf } from "@/lib/tv-nav";
 import { Library } from "@/screens/Library";
 import { AddPlaylist } from "@/screens/AddPlaylist";
 import { ShareSheet } from "@/screens/ShareSheet";
+import { EditPlaylist } from "@/screens/EditPlaylist";
+import { EpgGuide } from "@/screens/EpgGuide";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 // The player pulls in hls.js (~530 kB min) and is only needed once a channel is
@@ -28,7 +34,7 @@ function ThemeToggle() {
           aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
           onClick={() => setMode(dark ? "light" : "dark")}
         >
-          {dark ? <Sun /> : <Moon />}
+          {dark ? <Moon /> : <Sun />}
         </Button>
       </Tooltip.Trigger>
       <Tooltip.Content>{dark ? "Light mode" : "Dark mode"}</Tooltip.Content>
@@ -36,10 +42,70 @@ function ThemeToggle() {
   );
 }
 
+function ActiveScreen({ screen }: { screen: Screen }) {
+  switch (screen.name) {
+    case "library":
+      return <Library />;
+    case "player":
+      return (
+        <Suspense fallback={<PlayerFallback />}>
+          <PlayerScreen screen={screen} />
+        </Suspense>
+      );
+    case "add":
+      return <AddPlaylist />;
+    case "edit":
+      return <EditPlaylist playlistId={screen.playlistId} />;
+    case "share":
+      return <ShareSheet playlistId={screen.playlistId} />;
+    case "epg":
+      return <EpgGuide playlistId={screen.playlistId} channelId={screen.channelId} />;
+  }
+}
+
 export function App() {
   const app = useApp();
-  const [addOpen, setAddOpen] = useState(false);
-  const [shareFor, setShareFor] = useState<string | null>(null);
+  const mainRef = useRef<HTMLElement>(null);
+  const screenKey = screenKeyOf(app.screen);
+  const screenKeyRef = useRef(screenKey);
+
+  // Remote/keyboard input: arrows move DOM focus, Back/Escape pops the screen
+  // stack. Installed everywhere (desktop keyboards get the same navigation).
+  useEffect(() => {
+    const uninstallInput = installTvInput();
+    const removeNav = installTvNav();
+    const removeBack = pushKeyHandler((key) => (key === "back" ? goBack() : false));
+    return () => {
+      removeBack();
+      removeNav();
+      uninstallInput();
+    };
+  }, []);
+
+  // Per-screen focus memory (TV): remember the last data-focus-key element so
+  // Back restores focus to the row the user left.
+  useEffect(() => {
+    screenKeyRef.current = screenKey;
+  }, [screenKey]);
+  useEffect(() => {
+    if (!isTv) return;
+    const onFocusIn = (e: FocusEvent) => {
+      const t = e.target instanceof HTMLElement ? e.target.closest<HTMLElement>("[data-focus-key]") : null;
+      const k = t?.dataset.focusKey;
+      if (k) focusMemory.set(screenKeyRef.current, k);
+    };
+    window.addEventListener("focusin", onFocusIn);
+    return () => window.removeEventListener("focusin", onFocusIn);
+  }, []);
+
+  // Entry focus per screen (TV): restore the remembered element, else the first
+  // focusable. Re-runs when async data lands (loading flip / playlists arriving)
+  // and no-ops whenever focus is already inside the screen.
+  useEffect(() => {
+    if (!isTv) return;
+    const el = mainRef.current;
+    if (el) focusScreen(el, screenKey);
+  }, [screenKey, app.loading, app.playlists.length]);
 
   useEffect(() => {
     void bootstrap();
@@ -65,12 +131,8 @@ export function App() {
     };
   }, []);
 
-  function openShare(playlistId: string) {
-    setShareFor(playlistId);
-  }
-
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-3xl flex-col gap-6 px-4 py-6 sm:px-6 sm:py-8">
+    <div className="app-shell mx-auto flex min-h-dvh w-full max-w-3xl flex-col gap-6 px-4 py-6 sm:px-6 sm:py-8">
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <ProductHeader name="AnyTub3" description="Decentralized IPTV" iconSrc={anytubIcon} />
         <div className="flex shrink-0 items-center gap-2">
@@ -85,22 +147,11 @@ export function App() {
 
       {/* Keyed per screen so a crash in the player can't black-screen the whole
           app: the boundary shows a recoverable message and remounts on nav. */}
-      <ErrorBoundary key={app.screen.name} onReset={goLibrary}>
-        {app.screen.name === "library" ? (
-          <Library onAdd={() => setAddOpen(true)} onShare={openShare} />
-        ) : (
-          <Suspense fallback={<PlayerFallback />}>
-            <PlayerScreen screen={app.screen} onShare={openShare} />
-          </Suspense>
-        )}
-      </ErrorBoundary>
-
-      <AddPlaylist open={addOpen} onOpenChange={setAddOpen} />
-      <ShareSheet
-        open={shareFor !== null}
-        onOpenChange={(o) => !o && setShareFor(null)}
-        playlistId={shareFor}
-      />
+      <main ref={mainRef} className="contents">
+        <ErrorBoundary key={app.screen.name} onReset={goLibrary}>
+          <ActiveScreen screen={app.screen} />
+        </ErrorBoundary>
+      </main>
     </div>
   );
 }

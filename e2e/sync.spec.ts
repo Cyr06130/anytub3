@@ -37,19 +37,17 @@ async function importCode(page: Page, code: string) {
   await page.getByRole("button", { name: "Import", exact: true }).click();
 }
 
-// rename / delete operate on a library with a single playlist → the "Playlist
-// actions" menu is unambiguous.
+// rename / delete operate on a library with a single playlist → the inline
+// card action buttons are unambiguous.
 async function rename(page: Page, to: string) {
-  await page.getByRole("button", { name: "Playlist actions" }).click();
-  await page.getByRole("menuitem", { name: "Edit" }).click();
-  await expect(page.getByText("Edit playlist")).toBeVisible();
+  await page.getByRole("button", { name: "Edit playlist" }).click();
+  await expect(page.getByRole("heading", { name: "Edit playlist" })).toBeVisible();
   await page.getByPlaceholder("Playlist name").fill(to);
   await page.getByRole("button", { name: "Save" }).click();
 }
 
 async function remove(page: Page) {
-  await page.getByRole("button", { name: "Playlist actions" }).click();
-  await page.getByRole("menuitem", { name: "Delete" }).click();
+  await page.getByRole("button", { name: "Delete playlist" }).click();
   await expect(page.getByText("Delete playlist?")).toBeVisible();
   await page.getByRole("button", { name: "Delete", exact: true }).click();
 }

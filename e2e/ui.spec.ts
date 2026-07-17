@@ -66,8 +66,7 @@ test.describe("edit + delete playlist", () => {
     await page.goto("/");
     await loadSample(page);
 
-    await page.getByRole("button", { name: "Playlist actions" }).first().click();
-    await page.getByRole("menuitem", { name: "Edit" }).click();
+    await page.getByRole("button", { name: "Edit playlist" }).first().click();
 
     const input = page.getByPlaceholder("Playlist name");
     await input.fill("My renamed playlist");
@@ -81,8 +80,7 @@ test.describe("edit + delete playlist", () => {
     await page.goto("/");
     await loadSample(page);
 
-    await page.getByRole("button", { name: "Playlist actions" }).first().click();
-    await page.getByRole("menuitem", { name: "Edit" }).click();
+    await page.getByRole("button", { name: "Edit playlist" }).first().click();
     await page.getByRole("button", { name: "Remove Big Buck Bunny" }).click();
     await page.getByRole("button", { name: "Save" }).click();
 
@@ -95,10 +93,9 @@ test.describe("edit + delete playlist", () => {
     await page.goto("/");
     await loadSample(page);
 
-    await page.getByRole("button", { name: "Playlist actions" }).first().click();
-    await page.getByRole("menuitem", { name: "Delete" }).click();
-    // Confirm in the alert dialog.
-    await page.getByRole("button", { name: "Delete" }).click();
+    await page.getByRole("button", { name: "Delete playlist" }).first().click();
+    // Confirm inline (no modal — TV friendly).
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
 
     await expect(page.getByText("No playlists")).toBeVisible();
     await expect(page.getByText(/Playlist deleted/)).toBeVisible();
