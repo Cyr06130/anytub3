@@ -18,9 +18,7 @@ export type TvKey =
   | "back"
   | "play"
   | "pause"
-  | "playpause"
-  | "rew"
-  | "ff";
+  | "playpause";
 
 export type TvKeyHandler = (key: TvKey, e: KeyboardEvent) => boolean;
 
@@ -58,10 +56,6 @@ function mapKey(e: KeyboardEvent): TvKey | null {
       return "pause";
     case 179:
       return "playpause";
-    case 412:
-      return "rew";
-    case 417:
-      return "ff";
   }
   switch (e.key) {
     case "GoBack":
@@ -72,10 +66,6 @@ function mapKey(e: KeyboardEvent): TvKey | null {
       return "pause";
     case "MediaPlayPause":
       return "playpause";
-    case "MediaRewind":
-      return "rew";
-    case "MediaFastForward":
-      return "ff";
   }
   return null;
 }

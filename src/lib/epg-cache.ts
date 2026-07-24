@@ -1,5 +1,6 @@
 import { compressText, decompressText } from "@/lib/codec";
 import type { HostBridge } from "@/lib/bridge/types";
+import { djb2 } from "@/lib/hash";
 
 // Per-device EPG cache. EPG data (XMLTV guides, the iptv-org directory) is
 // public, large and refreshed at most daily, so it lives ONLY in the per-device
@@ -8,17 +9,16 @@ import type { HostBridge } from "@/lib/bridge/types";
 // gzip-compressed (see codec.ts) to keep the footprint — and the memory we hold
 // — small, which is the whole point of fetching lazily.
 
-type CacheRecord = { at: number; blob: string };
+// `url` is stored so a hit can be verified: the key is a 32-bit hash and a
+// collision must not silently serve another URL's body.
+type CacheRecord = { at: number; url: string; blob: string };
 
 // localStorage quota is ~5MB; don't cache a blob that could threaten it. An
 // oversized guide is still usable — it's just re-fetched next time instead.
 const MAX_CACHED_BLOB = 2_000_000; // base64 chars (~1.5 MB)
 
 function hashKey(s: string): string {
-  // djb2 — stable, dependency-free (same as m3u.ts entry ids).
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-  return (h >>> 0).toString(36);
+  return djb2(s).toString(36);
 }
 
 /**
@@ -39,7 +39,7 @@ export async function cachedFetchText(
   if (cached) {
     try {
       const rec = JSON.parse(cached) as CacheRecord;
-      if (rec && typeof rec.blob === "string" && Date.now() - rec.at < ttlMs) {
+      if (rec && typeof rec.blob === "string" && rec.url === url && Date.now() - rec.at < ttlMs) {
         return await decompressText(rec.blob);
       }
     } catch {
@@ -51,7 +51,7 @@ export async function cachedFetchText(
   try {
     const blob = await compressText(text);
     if (blob.length <= MAX_CACHED_BLOB) {
-      bridge.localSet(key, JSON.stringify({ at: Date.now(), blob } satisfies CacheRecord));
+      bridge.localSet(key, JSON.stringify({ at: Date.now(), url, blob } satisfies CacheRecord));
     }
   } catch {
     /* caching is best-effort (quota / codec) — never fail the fetch over it */

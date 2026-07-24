@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Badge, Button, Skeleton, Input } from "@novasamatech/tr-ui";
 import { CalendarClock, Link as LinkIcon } from "lucide-react";
-import type { Channel, ChannelEpg, Playlist, Programme } from "@/types";
-import { getChannelEpg, EpgError, progress } from "@/lib/epg";
+import type { Channel, ChannelEpg, Playlist } from "@/types";
+import { getChannelEpg, nowAndNext, progress } from "@/lib/epg";
+import { isHttpUrl } from "@/lib/url";
 import { setPlaylistEpgUrl } from "@/state/store";
 
 /** Small per-channel affordance that opens the guide. Lives BESIDE the tune
@@ -60,15 +61,14 @@ export function EpgView({ playlist, channel }: EpgViewProps) {
       .then((epg) => active && setState({ status: "ready", epg }))
       .catch((e) => {
         if (!active) return;
-        const message =
-          e instanceof EpgError || e instanceof Error ? e.message : "Could not load the guide.";
+        const message = e instanceof Error ? e.message : "Could not load the guide.";
         setState({ status: "error", message });
       });
     return () => {
       active = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playlist.id, channel.id, override]);
+  }, [playlist.id, playlist.epgUrl, channel.id, override]);
 
   // Keep "now"/progress live while the guide stays open (no refetch).
   useEffect(() => {
@@ -78,7 +78,7 @@ export function EpgView({ playlist, channel }: EpgViewProps) {
 
   function applyUrl() {
     const url = draftUrl.trim();
-    if (!/^https?:\/\//i.test(url)) return;
+    if (!isHttpUrl(url)) return;
     setOverride(url); // drives an immediate reload via the effect above
     void setPlaylistEpgUrl(playlist.id, url); // persist for next time + sync
   }
@@ -92,15 +92,9 @@ export function EpgView({ playlist, channel }: EpgViewProps) {
 
       {state.status === "loading" && (
         <div className="flex flex-col gap-3">
-          <div className="h-20 w-full">
-            <Skeleton style={{ height: "100%", width: "100%" }} />
-          </div>
-          <div className="h-9 w-2/3">
-            <Skeleton style={{ height: "100%", width: "100%" }} />
-          </div>
-          <div className="h-9 w-1/2">
-            <Skeleton style={{ height: "100%", width: "100%" }} />
-          </div>
+          <SkeletonBlock className="h-20 w-full" />
+          <SkeletonBlock className="h-9 w-2/3" />
+          <SkeletonBlock className="h-9 w-1/2" />
         </div>
       )}
 
@@ -133,6 +127,15 @@ export function EpgView({ playlist, channel }: EpgViewProps) {
   );
 }
 
+/** Sized skeleton — tr-ui's Skeleton can't be sized directly (no className). */
+function SkeletonBlock({ className }: { className: string }) {
+  return (
+    <div className={className}>
+      <Skeleton style={{ height: "100%", width: "100%" }} />
+    </div>
+  );
+}
+
 function ProgressBar({ value }: { value: number }) {
   const pct = Math.round(value * 100);
   return (
@@ -152,9 +155,7 @@ function Guide({ epg, now }: { epg: ChannelEpg; now: number }) {
   // Derive current/next from the loaded programmes at the live `now` so the
   // panel stays correct as time passes, without refetching.
   const list = epg.upcoming;
-  const current: Programme | undefined = list.find((p) => p.start <= now && now < p.stop);
-  const idx = current ? list.indexOf(current) : -1;
-  const next: Programme | undefined = idx >= 0 ? list[idx + 1] : list.find((p) => p.start > now);
+  const { now: current, next } = nowAndNext(list, now);
 
   return (
     <div className="flex flex-col gap-4">
@@ -190,7 +191,7 @@ function Guide({ epg, now }: { epg: ChannelEpg; now: number }) {
             const isNow = p === current;
             return (
               <div
-                key={`${p.start}-${p.title}`}
+                key={`${p.start}-${p.stop}-${p.title}`}
                 className={`flex items-baseline gap-3 px-3 py-2 ${isNow ? "bg-bg-selection-container-hover" : ""}`}
               >
                 <span className="text-fg-secondary w-24 shrink-0 text-sm tabular-nums">

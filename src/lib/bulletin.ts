@@ -3,6 +3,7 @@ import { getBridge } from "@/lib/bridge";
 import { symKey } from "@/lib/keys";
 import { sanitizeEntries } from "@/lib/m3u";
 import { KEY_CTX } from "@/lib/config";
+import { isHttpUrl } from "@/lib/url";
 import type { LibraryIndex, Playlist, PlaylistBody } from "@/types";
 
 const LIBRARY_INDEX_CTX = "anytub3/library-index/v1";
@@ -39,7 +40,7 @@ export async function storePlaylist(playlist: Playlist): Promise<{ cid: string; 
     title: playlist.title,
     entries: playlist.entries,
     // Persist the EPG source so it survives a cold restore / cross-host sync.
-    ...(playlist.epgUrl && /^https?:\/\//i.test(playlist.epgUrl) ? { epgUrl: playlist.epgUrl } : {}),
+    ...(isHttpUrl(playlist.epgUrl) ? { epgUrl: playlist.epgUrl } : {}),
   };
   const bridge = await getBridge();
   const cid = await bridge.cloudStore(encryptJson(body, key));
@@ -65,7 +66,7 @@ export async function loadPlaylist(cid: string, key: Uint8Array): Promise<Playli
     title: typeof body.title === "string" ? body.title : "",
     entries: sanitizeEntries(body.entries),
     // EPG source is a plain http(s) URL or nothing — validate the scheme too.
-    ...(typeof body.epgUrl === "string" && /^https?:\/\//i.test(body.epgUrl) ? { epgUrl: body.epgUrl } : {}),
+    ...(isHttpUrl(body.epgUrl) ? { epgUrl: body.epgUrl } : {}),
   };
 }
 
@@ -102,7 +103,7 @@ export function buildLibraryIndex(
         id: p.id,
         cid: p.cid!,
         title: p.title,
-        channelCount: p.entries?.length ?? 0,
+        channelCount: p.entries.length,
         addedAt: p.addedAt,
         ...(p.sourceCid ? { sourceCid: p.sourceCid } : {}),
       })),

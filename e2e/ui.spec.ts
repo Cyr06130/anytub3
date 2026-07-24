@@ -51,13 +51,13 @@ test.describe("fullscreen", () => {
         return c ? getComputedStyle(c).position : null;
       });
 
-    expect(await containerPosition()).toBe("relative");
+    await expect.poll(containerPosition).toBe("relative");
     await page.getByRole("button", { name: "Fullscreen" }).click();
     // Fallback engaged: the player container fills the viewport.
-    expect(await containerPosition()).toBe("fixed");
+    await expect.poll(containerPosition).toBe("fixed");
 
     await page.getByRole("button", { name: "Exit fullscreen" }).click();
-    expect(await containerPosition()).toBe("relative");
+    await expect.poll(containerPosition).toBe("relative");
   });
 });
 

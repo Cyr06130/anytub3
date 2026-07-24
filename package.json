@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
     "lint": "tsc -b --noEmit",
+    "test:unit": "vitest run",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -32,8 +33,10 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^5.2",
+    "jsdom": "^29.1.1",
     "tailwindcss": "^4.3",
     "typescript": "^5.7",
-    "vite": "^7"
+    "vite": "^7",
+    "vitest": "^4.1.10"
   }
 }

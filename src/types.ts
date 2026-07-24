@@ -77,6 +77,8 @@ export type NowPlaying = {
 /** Durable head pointer — published to the `library-head` Statement Store channel. */
 export type LibraryHead = {
   indexCid: string;
+  /** LWW key. FROZEN wire format: renaming to `timestamp` (like NowPlaying)
+   *  would desync against already-deployed clients and cached heads. */
   ts: number;
 };
 

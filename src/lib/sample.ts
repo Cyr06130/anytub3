@@ -17,8 +17,9 @@ https://test-streams.mux.dev/tos_ismc/main.m3u8
 https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8
 `;
 
-/** XMLTV timestamp: `YYYYMMDDHHMMSS +0000` (UTC). */
-function xmltvTime(ms: number): string {
+/** XMLTV timestamp: `YYYYMMDDHHMMSS +0000` (UTC). Exported so tests build
+ *  fixtures with the SAME formatter instead of hand-copying it. */
+export function xmltvTime(ms: number): string {
   const d = new Date(ms);
   const p = (n: number, w = 2) => String(n).padStart(w, "0");
   return (

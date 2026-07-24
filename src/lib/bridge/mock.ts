@@ -1,5 +1,7 @@
 import { sha256 } from "@parity/product-sdk-crypto";
 import type { ChannelEnvelope, ChannelLike, HostBridge } from "./types";
+import { isHttpUrl } from "@/lib/url";
+import { base64FromBytes, bytesFromBase64 } from "@/lib/bytes";
 
 // ── Standalone / dev bridge ──────────────────────────────────────────────────
 // Emulates the host out of a container (design: "dev off-host → degraded mode").
@@ -22,18 +24,6 @@ const CLOUD_PREFIX = "anytub3.mock.cloud.";
 const CHAN_PREFIX = "anytub3.mock.chan.";
 const LOCAL_PREFIX = "anytub3.mock.local.";
 
-function b64encode(bytes: Uint8Array): string {
-  let s = "";
-  for (const b of bytes) s += String.fromCharCode(b);
-  return btoa(s);
-}
-function b64decode(s: string): Uint8Array {
-  const bin = atob(s);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-
 // Deterministic httpGet fixtures (e2e + demo): exact-URL → response body. A
 // registered fixture short-circuits the network so EPG tests never flake on a
 // live host. Stored on globalThis so a Playwright init script can seed it before
@@ -49,9 +39,9 @@ export function setHttpFixture(url: string, body: string): void {
 
 function getOrCreateSeed(): Uint8Array {
   const existing = localStorage.getItem(SEED_KEY);
-  if (existing) return b64decode(existing);
+  if (existing) return bytesFromBase64(existing);
   const seed = crypto.getRandomValues(new Uint8Array(32));
-  localStorage.setItem(SEED_KEY, b64encode(seed));
+  localStorage.setItem(SEED_KEY, base64FromBytes(seed));
   return seed;
 }
 
@@ -76,6 +66,10 @@ class MockChannel implements ChannelLike {
     this.bc = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(CHAN_PREFIX + topic2) : null;
     this.bc?.addEventListener("message", (ev: MessageEvent) => {
       const { channelName, value } = ev.data as { channelName: string; value: ChannelEnvelope };
+      // Same last-write-wins guard as write(): a late message from a lagging
+      // tab must not regress the persisted head that read() then serves.
+      const prev = this.read(channelName);
+      if (prev && prev.timestamp > value.timestamp) return;
       this.persist(channelName, value);
       this.deliver(channelName, value);
     });
@@ -127,7 +121,7 @@ export function createMockBridge(): HostBridge {
 
     async getUserId() {
       // Stable pseudo-identity from the seed.
-      return `mock-${b64encode(seed).slice(0, 10)}`;
+      return `mock-${base64FromBytes(seed).slice(0, 10)}`;
     },
 
     subscribeTheme(cb) {
@@ -155,14 +149,14 @@ export function createMockBridge(): HostBridge {
       let hex = "";
       for (const b of digest) hex += b.toString(16).padStart(2, "0");
       const cid = `bafymock${hex.slice(0, 48)}`; // CID-ish, content-addressed
-      localStorage.setItem(CLOUD_PREFIX + cid, b64encode(bytes));
+      localStorage.setItem(CLOUD_PREFIX + cid, base64FromBytes(bytes));
       return cid;
     },
 
     async cloudFetch(cid: string) {
       const raw = localStorage.getItem(CLOUD_PREFIX + cid);
       if (!raw) throw new Error(`Mock cloud: CID not found ${cid}`);
-      return b64decode(raw);
+      return bytesFromBase64(raw);
     },
 
     async httpGet(url: string) {
@@ -170,7 +164,7 @@ export function createMockBridge(): HostBridge {
       if (fixture !== undefined) return fixture;
       // No fixture → behave like the real bridge (lets the demo fetch a real
       // provider's guide when CORS permits).
-      if (!/^https?:\/\//i.test(url)) throw new Error("Only http(s) URLs are supported.");
+      if (!isHttpUrl(url)) throw new Error("Only http(s) URLs are supported.");
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.text();

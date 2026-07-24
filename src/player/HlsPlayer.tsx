@@ -39,6 +39,9 @@ type FsDoc = Document & {
   webkitExitFullscreen?: () => Promise<void> | void;
 };
 
+/** Silent fatal-error recoveries per kind before giving up (one toast). */
+const MAX_RECOVERY_ATTEMPTS = 2;
+
 function currentFullscreenElement(): Element | null {
   return document.fullscreenElement ?? (document as FsDoc).webkitFullscreenElement ?? null;
 }
@@ -150,6 +153,17 @@ export function HlsPlayer({
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           if (autoPlay) void video.play().catch(() => undefined);
         });
+        // Fatal errors: retry silently a bounded number of times, then give up
+        // with ONE toast — an unbounded startLoad() loop on a dead/CORS-blocked
+        // stream would otherwise toast forever. Counters reset on src change
+        // (this effect re-runs).
+        let networkRetries = 0;
+        let mediaRecoveries = 0;
+        const giveUp = (message: string) => {
+          setLoading(false);
+          onError?.(message);
+          hls?.destroy();
+        };
         hls.on(Hls.Events.ERROR, (_evt, data) => {
           if (!data.fatal) return;
           // Recovery calls can themselves throw if the instance is already gone;
@@ -157,16 +171,15 @@ export function HlsPlayer({
           try {
             switch (data.type) {
               case Hls.ErrorTypes.NETWORK_ERROR:
-                onError?.("Stream unreachable (network / CORS / permission). A proxy may be required.");
-                hls?.startLoad();
+                if (networkRetries++ < MAX_RECOVERY_ATTEMPTS) hls?.startLoad();
+                else giveUp("Stream unreachable (network / CORS / permission). A proxy may be required.");
                 break;
               case Hls.ErrorTypes.MEDIA_ERROR:
-                onError?.("Stream media error.");
-                hls?.recoverMediaError();
+                if (mediaRecoveries++ < MAX_RECOVERY_ATTEMPTS) hls?.recoverMediaError();
+                else giveUp("Stream media error.");
                 break;
               default:
-                onError?.("Stream cannot be played.");
-                hls?.destroy();
+                giveUp("Stream cannot be played.");
             }
           } catch {
             hls?.destroy();
@@ -176,6 +189,7 @@ export function HlsPlayer({
         video.src = src;
         if (autoPlay) void video.play().catch(() => undefined);
       } else {
+        setLoading(false);
         onError?.("HLS is not supported by this browser.");
       }
     } catch (err) {

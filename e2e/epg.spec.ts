@@ -1,34 +1,22 @@
 import { test, expect } from "@playwright/test";
+import { SAMPLE_EPG_URL, xmltvTime } from "../src/lib/sample";
 
-const SAMPLE_EPG_URL = "https://anytub3.demo/sample-epg.xml";
-
-// Build an XMLTV guide anchored on the browser's current time so there is always
-// a deterministic "now" + "next" for the first sample channel (tvg-id mux.test).
-// Seeded through the mock bridge's httpGet fixture registry — no network.
-function seedFixture() {
-  return (url: string) => {
-    const now = Date.now();
-    const fmt = (ms: number) => {
-      const d = new Date(ms);
-      const p = (n: number, w = 2) => String(n).padStart(w, "0");
-      return (
-        `${p(d.getUTCFullYear(), 4)}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}` +
-        `${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())} +0000`
-      );
-    };
-    const s0 = now - 10 * 60_000; // started 10 min ago → on air now
-    const e0 = now + 50 * 60_000;
-    const e1 = now + 110 * 60_000;
-    const xml =
-      `<?xml version="1.0" encoding="UTF-8"?><tv>` +
-      `<programme start="${fmt(s0)}" stop="${fmt(e0)}" channel="mux.test">` +
-      `<title>E2E Live Show</title><desc>On air during the test.</desc><category>Test</category></programme>` +
-      `<programme start="${fmt(e0)}" stop="${fmt(e1)}" channel="mux.test">` +
-      `<title>E2E Next Show</title></programme>` +
-      `</tv>`;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).__anytub3.setHttpFixture(url, xml);
-  };
+// Build an XMLTV guide anchored on the current time so there is always a
+// deterministic "now" + "next" for the first sample channel (tvg-id mux.test).
+// URL constant + timestamp formatter come from the app (single authority);
+// seeded through the mock bridge's httpGet fixture registry — no network.
+function buildFixtureXml(now: number): string {
+  const s0 = now - 10 * 60_000; // started 10 min ago → on air now
+  const e0 = now + 50 * 60_000;
+  const e1 = now + 110 * 60_000;
+  return (
+    `<?xml version="1.0" encoding="UTF-8"?><tv>` +
+    `<programme start="${xmltvTime(s0)}" stop="${xmltvTime(e0)}" channel="mux.test">` +
+    `<title>E2E Live Show</title><desc>On air during the test.</desc><category>Test</category></programme>` +
+    `<programme start="${xmltvTime(e0)}" stop="${xmltvTime(e1)}" channel="mux.test">` +
+    `<title>E2E Next Show</title></programme>` +
+    `</tv>`
+  );
 }
 
 test.describe("EPG — lazy, on-demand programme guide", () => {
@@ -41,7 +29,13 @@ test.describe("EPG — lazy, on-demand programme guide", () => {
 
     // Seed a deterministic guide for the sample's EPG source (overrides the
     // demo fixture). Nothing has been fetched yet — EPG is lazy.
-    await page.evaluate(seedFixture(), SAMPLE_EPG_URL);
+    await page.evaluate(
+      ([url, xml]) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (window as any).__anytub3.setHttpFixture(url, xml);
+      },
+      [SAMPLE_EPG_URL, buildFixtureXml(Date.now())] as const,
+    );
 
     // The sample playlist advertises an EPG source, so each channel row exposes
     // a "Programme guide" button. Open the first channel's (mux.test) guide.

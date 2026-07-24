@@ -1,7 +1,8 @@
 import type { ChannelStore as ChannelStoreT } from "@parity/product-sdk-statement-store";
 import type { CloudStorageClient as CloudStorageClientT } from "@parity/product-sdk-cloud-storage";
-import { CLOUD_ENVIRONMENT, DOTNS_IDENTIFIER, APP_NAME, PRODUCT_DERIVATION_INDEX, SHARE_ROOM } from "@/lib/config";
+import { CLOUD_ENVIRONMENT, DOTNS_IDENTIFIER, APP_NAME, PRODUCT_DERIVATION_INDEX, SHARE_ROOM, STATEMENT_TTL_SECONDS } from "@/lib/config";
 import type { ChannelEnvelope, ChannelLike, HostBridge } from "./types";
+import { isHttpUrl } from "@/lib/url";
 
 // ── Real host bridge ─────────────────────────────────────────────────────────
 // Wires the Parity product SDK. The SDK is *dynamically* imported so the
@@ -103,7 +104,7 @@ export async function createRealBridge(): Promise<HostBridge> {
       try {
         const ss = await import("@parity/product-sdk-statement-store");
         ChannelStoreCtor = ss.ChannelStore;
-        ssc = new ss.StatementStoreClient({ appName: APP_NAME, defaultTtlSeconds: 120 });
+        ssc = new ss.StatementStoreClient({ appName: APP_NAME, defaultTtlSeconds: STATEMENT_TTL_SECONDS });
         await ssc.connect({ mode: "host", accountId: accountId() });
       } catch (e) {
         console.warn("[AnyTub3] Statement Store unavailable:", e);
@@ -209,7 +210,7 @@ export async function createRealBridge(): Promise<HostBridge> {
       // javascript:/file:/data: URLs. In-host, this fetch is subject to the
       // host's external-access permission (the user may be prompted), like the
       // external streams.
-      if (!/^https?:\/\//i.test(url)) throw new Error("Only http(s) URLs are supported.");
+      if (!isHttpUrl(url)) throw new Error("Only http(s) URLs are supported.");
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.text();

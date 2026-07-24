@@ -13,6 +13,9 @@ export const KEY_CTX = {
   npEnc: "anytub3/np-enc/v1",
   libChannel: "anytub3/lib-channel/v1",
   libEnc: "anytub3/lib-enc/v1",
+  // FROZEN: this domain doesn't follow the `anytub3/<name>/v1` convention, but
+  // changing it would re-derive every playlist content key and orphan all blobs
+  // already stored on Bulletin. Do not align it.
   playlist: (id: string) => `playlist:${id}`,
 } as const;
 
@@ -33,5 +36,9 @@ export const SHARE_ROOM = { roomId: "anytub3-shares", name: "AnyTub3", icon: "" 
 // Heartbeats (design §8): now-playing refresh ~15s; library-head longer.
 export const NP_HEARTBEAT_MS = 15_000;
 export const LIB_HEARTBEAT_MS = 60_000;
-export const NP_TTL_SECONDS = 120;
-export const LIB_TTL_SECONDS = 600;
+// Statement TTL. The SDK's ChannelStore only supports ONE client-wide TTL (no
+// per-write override), so both channels expire after this. That's the right
+// bound for now-playing (a stopped device must fade fast); the library head
+// relies on the 60s heartbeat while any host is alive and on the per-device
+// cache (readCachedLibraryHead) for cold resume, so it doesn't need its own.
+export const STATEMENT_TTL_SECONDS = 120;

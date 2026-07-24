@@ -16,8 +16,13 @@ import { cachedFetchText } from "@/lib/epg-cache";
 const DIRECTORY_URL = "https://iptv-org.github.io/api/channels.json";
 const TTL_MS = 7 * 24 * 3_600_000; // a week — the directory changes slowly
 
-let byIdPromise: Promise<Map<string, DirectoryChannel>> | null = null;
-let nameToId: Map<string, string> | null = null;
+type Directory = {
+  byId: Map<string, DirectoryChannel>;
+  /** Normalized display name → canonical id (closed channels excluded). */
+  byName: Map<string, string>;
+};
+
+let directoryPromise: Promise<Directory> | null = null;
 
 /** Normalize a channel name for matching: lowercase, drop accents & noise. */
 function normalizeName(name: string): string {
@@ -29,9 +34,11 @@ function normalizeName(name: string): string {
     .replace(/[^a-z0-9]+/g, ""); // keep alphanumerics only
 }
 
-function load(bridge: HostBridge): Promise<Map<string, DirectoryChannel>> {
-  if (byIdPromise) return byIdPromise;
-  byIdPromise = (async () => {
+function load(bridge: HostBridge): Promise<Directory> {
+  if (directoryPromise) return directoryPromise;
+  // Memoize success only: a transient fetch failure must not poison the whole
+  // session — the next guide open simply retries.
+  directoryPromise = (async () => {
     const raw = await cachedFetchText(bridge, DIRECTORY_URL, "directory", TTL_MS);
     const arr = JSON.parse(raw) as unknown;
     const byId = new Map<string, DirectoryChannel>();
@@ -44,9 +51,9 @@ function load(bridge: HostBridge): Promise<Map<string, DirectoryChannel>> {
         const dc: DirectoryChannel = {
           id: c.id,
           name: typeof c.name === "string" ? c.name : "",
-          alt_names: Array.isArray(c.alt_names) ? (c.alt_names.filter((n) => typeof n === "string") as string[]) : undefined,
+          alt_names: Array.isArray(c.alt_names) ? c.alt_names.filter((n): n is string => typeof n === "string") : undefined,
           country: typeof c.country === "string" ? c.country : undefined,
-          categories: Array.isArray(c.categories) ? (c.categories.filter((n) => typeof n === "string") as string[]) : undefined,
+          categories: Array.isArray(c.categories) ? c.categories.filter((n): n is string => typeof n === "string") : undefined,
           closed: typeof c.closed === "string" ? c.closed : null,
         };
         byId.set(dc.id, dc);
@@ -57,10 +64,12 @@ function load(bridge: HostBridge): Promise<Map<string, DirectoryChannel>> {
         }
       }
     }
-    nameToId = byName;
-    return byId;
-  })();
-  return byIdPromise;
+    return { byId, byName };
+  })().catch((e) => {
+    directoryPromise = null; // allow a retry on the next call
+    throw e;
+  });
+  return directoryPromise;
 }
 
 /**
@@ -69,8 +78,8 @@ function load(bridge: HostBridge): Promise<Map<string, DirectoryChannel>> {
  * match only (no fuzzy guessing) to avoid wrong associations.
  */
 export async function resolveTvgId(bridge: HostBridge, name: string): Promise<string | undefined> {
-  await load(bridge);
-  return nameToId?.get(normalizeName(name));
+  const { byName } = await load(bridge);
+  return byName.get(normalizeName(name));
 }
 
 /**
@@ -82,8 +91,8 @@ export async function resolveTvgId(bridge: HostBridge, name: string): Promise<st
 export async function channelMeta(
   channelId: string,
 ): Promise<{ name?: string; categories?: string[] } | undefined> {
-  if (!byIdPromise) return undefined;
-  const byId = await byIdPromise;
+  if (!directoryPromise) return undefined;
+  const { byId } = await directoryPromise;
   const dc = byId.get(channelId);
   if (!dc) return undefined;
   return { name: dc.name || undefined, categories: dc.categories };

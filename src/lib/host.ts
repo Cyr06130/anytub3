@@ -1,10 +1,5 @@
 import { getBridge } from "@/lib/bridge";
 
-/** Whether we're running inside a Polkadot host container. */
-export async function inHost(): Promise<boolean> {
-  return (await getBridge()).inHost;
-}
-
 /** Stable user identity (same across hosts for one wallet). */
 export async function currentUserId(): Promise<string | null> {
   return (await getBridge()).getUserId();

@@ -61,13 +61,14 @@ export function EditPlaylist({ playlistId }: EditProps) {
         />
 
         <div className="text-fg-secondary text-sm">
-          {entries.length} channel{entries.length > 1 ? "s" : ""}
+          {entries.length} channel{entries.length !== 1 ? "s" : ""}
         </div>
 
         <div className="border-border-secondary -mx-1 flex max-h-[55vh] flex-col overflow-y-auto rounded-[12px] border">
           {entries.map((ch) => (
             <div key={ch.id} className="flex items-center gap-1 pr-2">
               <div className="min-w-0 flex-1">
+                {/* trailingLabel is REQUIRED by the icon-label variant's type. */}
                 <ListItem variant="icon-label" icon={<Tv />} title={ch.name} description={ch.group} trailingLabel={undefined} />
               </div>
               <Button

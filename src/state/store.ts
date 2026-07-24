@@ -1,11 +1,13 @@
 import { useSyncExternalStore } from "react";
 import { toastInfo, toastSuccess, toastError } from "@novasamatech/tr-ui";
-import type { Channel, Playlist, SharePointer } from "@/types";
+import type { Channel, LibraryIndex, NowPlaying, Playlist, SharePointer } from "@/types";
 import { getBridge } from "@/lib/bridge";
+import { isHttpUrl } from "@/lib/url";
 import { currentUserId, preallocate } from "@/lib/host";
 import { symKey } from "@/lib/keys";
 import {
   buildLibraryIndex,
+  loadLibraryIndex,
   loadOwnPlaylist,
   loadPlaylist,
   storeLibraryIndex,
@@ -34,8 +36,7 @@ import {
   sharePlaylist,
   simulateIncomingShare,
 } from "@/lib/share";
-import { loadLibraryIndex } from "@/lib/bulletin";
-import { parseM3U } from "@/lib/m3u";
+import { deriveTitle, parseM3U, parseM3UHeader } from "@/lib/m3u";
 import { SAMPLE_M3U, SAMPLE_EPG_URL, buildSampleXmltv } from "@/lib/sample";
 
 // ── State shape ──────────────────────────────────────────────────────────────
@@ -258,32 +259,35 @@ async function restoreLibrary(): Promise<void> {
   }
 }
 
-async function mergeIndex(index: {
-  playlists: Array<{ id: string; cid: string; title: string; sourceCid?: string }>;
-}): Promise<void> {
+async function mergeIndex(index: LibraryIndex): Promise<void> {
   // Reconcile to the index: keep local-unpersisted playlists + those still in
   // the index, drop ones removed elsewhere, and load any we don't have yet.
   const indexCids = new Set(index.playlists.map((m) => m.cid));
   const kept = state.playlists.filter((p) => !p.cid || indexCids.has(p.cid));
   const haveCids = new Set(kept.map((p) => p.cid));
 
+  // Load missing playlists concurrently (cold boot scales with library size);
+  // allSettled keeps the per-item degradation, result order follows the index.
+  const results = await Promise.allSettled(
+    index.playlists
+      .filter((meta) => !haveCids.has(meta.cid))
+      .map(async (meta): Promise<Playlist> => {
+        const body = await loadOwnPlaylist(meta.id, meta.cid);
+        return {
+          id: body.id,
+          title: body.title || meta.title,
+          entries: body.entries,
+          cid: meta.cid,
+          sourceCid: meta.sourceCid,
+          ...(body.epgUrl ? { epgUrl: body.epgUrl } : {}),
+          addedAt: Date.now(),
+        };
+      }),
+  );
   const restored: Playlist[] = [];
-  for (const meta of index.playlists) {
-    if (haveCids.has(meta.cid)) continue;
-    try {
-      const body = await loadOwnPlaylist(meta.id, meta.cid);
-      restored.push({
-        id: body.id,
-        title: body.title || meta.title,
-        entries: body.entries,
-        cid: meta.cid,
-        sourceCid: meta.sourceCid,
-        ...(body.epgUrl ? { epgUrl: body.epgUrl } : {}),
-        addedAt: Date.now(),
-      });
-    } catch (e) {
-      console.warn("[AnyTub3] restore playlist:", meta.cid, e);
-    }
+  for (const r of results) {
+    if (r.status === "fulfilled") restored.push(r.value);
+    else console.warn("[AnyTub3] restore playlist:", r.reason);
   }
   if (restored.length || kept.length !== state.playlists.length) {
     setState({ playlists: [...kept, ...restored] });
@@ -309,7 +313,7 @@ function resumeNowPlaying(): void {
   resetScreen({ name: "player", playlistId: pl.id, channelId: np.channelId }, [{ name: "library" }]);
 }
 
-function handleRemoteNowPlaying(np: SharePointerlessNowPlaying): void {
+function handleRemoteNowPlaying(np: NowPlaying): void {
   if (np.timestamp <= state.nowPlayingTs) return; // not newer → ignore
   const pl = findByCid(np.playlistCid);
   if (!pl) return;
@@ -323,8 +327,6 @@ function handleRemoteNowPlaying(np: SharePointerlessNowPlaying): void {
   const ch = pl.entries.find((c) => c.id === np.channelId);
   toastInfo({ title: "Resumed from another device", description: ch?.name ?? pl.title });
 }
-
-type SharePointerlessNowPlaying = { playlistCid: string; channelId: string; timestamp: number };
 
 // ── Actions ──────────────────────────────────────────────────────────────────
 
@@ -360,12 +362,11 @@ export async function addPlaylistFromUrl(url: string): Promise<Channel[]> {
   const trimmed = url.trim();
   // Enforce the scheme here too, not only in the UI — never fetch()
   // javascript:/file:/data: or other non-http(s) URLs (audit #2).
-  if (!/^https?:\/\//i.test(trimmed)) {
+  if (!isHttpUrl(trimmed)) {
     throw new Error("Only http(s) playlist URLs are supported.");
   }
   const res = await fetch(trimmed);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const { parseM3U, parseM3UHeader, deriveTitle } = await import("@/lib/m3u");
   const text = await res.text();
   const entries = parseM3U(text);
   // Pick up the provider's EPG guide (url-tvg) advertised in the m3u header.
@@ -384,7 +385,13 @@ export async function tune(playlistId: string, channel: Channel): Promise<void> 
   try {
     const np = await publishNowPlaying({ playlistCid: pl.cid, channelId: channel.id });
     setState({ nowPlayingTs: np.timestamp });
-    startNpHeartbeat(() => (pl.cid ? { playlistCid: pl.cid, channelId: channel.id } : null));
+    // Resolve the playlist at tick time: editing it while playing re-stores the
+    // body under a NEW CID (Bulletin is immutable), and a heartbeat stuck on
+    // the tune-time CID would break handoff/resume on every other host.
+    startNpHeartbeat(() => {
+      const current = findPlaylist(playlistId);
+      return current?.cid ? { playlistCid: current.cid, channelId: channel.id } : null;
+    });
     await persistLibrary({ playlistCid: pl.cid, channelId: channel.id });
   } catch (e) {
     console.warn("[AnyTub3] tune publish:", e);
@@ -439,7 +446,7 @@ export async function updatePlaylist(
  */
 export async function setPlaylistEpgUrl(id: string, epgUrl: string): Promise<void> {
   const pl = findPlaylist(id);
-  if (!pl || !/^https?:\/\//i.test(epgUrl)) return;
+  if (!pl || !isHttpUrl(epgUrl)) return;
   const updated: Playlist = { ...pl, epgUrl };
   setState({ playlists: state.playlists.map((p) => (p.id === id ? updated : p)) });
   try {

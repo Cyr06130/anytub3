@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { Card, ListItem, Empty, Badge, Button } from "@novasamatech/tr-ui";
+import { Card, Empty, Badge, Button } from "@novasamatech/tr-ui";
 import { Tv, Plus, Share2, Pencil, Trash2 } from "lucide-react";
 import { deletePlaylist, navigate, tune, useApp } from "@/state/store";
-import { EpgButton } from "@/components/EpgPanel";
+import { ChannelRow } from "@/components/ChannelRow";
 
 export function Library() {
   const { playlists, loading, nowPlayingChannelId } = useApp();
@@ -113,29 +113,13 @@ export function Library() {
           <Card.Content>
             <div className="-mx-2 flex max-h-80 flex-col overflow-y-auto">
               {pl.entries.map((ch) => (
-                <div
+                <ChannelRow
                   key={ch.id}
-                  className="hover:bg-bg-selection-container-hover focus-within:bg-bg-selection-container-hover flex items-center gap-1 rounded-[8px] pr-2"
-                >
-                  <button
-                    onClick={() => void tune(pl.id, ch)}
-                    data-focus-key={ch.id}
-                    className="min-w-0 flex-1 text-left"
-                  >
-                    <ListItem
-                      variant="icon-label"
-                      icon={<Tv />}
-                      title={ch.name}
-                      description={ch.group}
-                      trailingLabel={
-                        ch.id === nowPlayingChannelId ? <Badge variant="primary">Live</Badge> : undefined
-                      }
-                    />
-                  </button>
-                  <EpgButton
-                    onClick={() => navigate({ name: "epg", playlistId: pl.id, channelId: ch.id })}
-                  />
-                </div>
+                  channel={ch}
+                  active={ch.id === nowPlayingChannelId}
+                  onTune={() => void tune(pl.id, ch)}
+                  onGuide={() => navigate({ name: "epg", playlistId: pl.id, channelId: ch.id })}
+                />
               ))}
             </div>
           </Card.Content>

@@ -119,6 +119,25 @@ test.describe("TV mode", () => {
     await expect(page.getByText("No playlists")).toBeVisible();
   });
 
+  test("webOS browser fallback: history Back (popstate sentinel) pops the screen", async ({ page }) => {
+    await gotoTv(page);
+    await expect(page.getByRole("button", { name: "Add a playlist" })).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("heading", { name: "Add a playlist" })).toBeVisible();
+
+    // Some firmwares route the Back key to browser history instead of
+    // delivering keyCode 461 — the pushState sentinel must turn the resulting
+    // popstate into a screen-back…
+    await page.evaluate(() => history.back());
+    await expect(page.getByText("No playlists")).toBeVisible();
+
+    // …and re-arm itself, so the next history-back works too.
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("heading", { name: "Add a playlist" })).toBeVisible();
+    await page.evaluate(() => history.back());
+    await expect(page.getByText("No playlists")).toBeVisible();
+  });
+
   test("a text field keeps left/right/enter; up/down/back leave it", async ({ page }) => {
     await gotoTv(page);
     await expect(page.getByRole("button", { name: "Add a playlist" })).toBeFocused();

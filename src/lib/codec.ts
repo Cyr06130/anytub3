@@ -12,6 +12,8 @@
 // already cached on a device — `decompressText` dispatches on the tag and an
 // unknown/old tag is treated as raw.
 
+import { base64FromBytes, bytesFromBase64 } from "@/lib/bytes";
+
 const CODEC_RAW = 0x52; // 'R' — stored uncompressed (CompressionStream absent)
 const CODEC_GZIP = 0x47; // 'G' — gzip via CompressionStream
 
@@ -21,31 +23,16 @@ function hasCompressionStream(): boolean {
 
 async function pipe(stream: TransformStream, input: Uint8Array): Promise<Uint8Array> {
   const writer = stream.writable.getWriter();
-  void writer.write(input);
-  void writer.close();
+  // Deliberately un-awaited (awaiting would deadlock on backpressure), but
+  // observed: on corrupt input both reject alongside the readable — the read
+  // below carries the error, these must not fire unhandledrejection too.
+  writer.write(input).catch(() => undefined);
+  writer.close().catch(() => undefined);
   return new Uint8Array(await new Response(stream.readable).arrayBuffer());
 }
 
 const gzip = (b: Uint8Array) => pipe(new CompressionStream("gzip"), b);
 const gunzip = (b: Uint8Array) => pipe(new DecompressionStream("gzip"), b);
-
-// btoa/atob choke on large strings and don't take byte arrays — encode in
-// chunks to stay well clear of argument-length limits on multi-MB guides.
-function base64FromBytes(bytes: Uint8Array): string {
-  let out = "";
-  const CHUNK = 0x8000;
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    out += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-  }
-  return btoa(out);
-}
-
-function bytesFromBase64(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
 
 function tagged(tag: number, payload: Uint8Array): Uint8Array {
   const out = new Uint8Array(payload.length + 1);

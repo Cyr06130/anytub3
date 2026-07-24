@@ -1,4 +1,3 @@
-import type { Screen } from "@/state/store";
 import { pushKeyHandler } from "@/lib/tv-input";
 
 /**
@@ -90,23 +89,11 @@ export function installTvNav(): () => void {
 
 // ── Per-screen focus memory ──────────────────────────────────────────────────
 // Back should land on the element the user left (e.g. the channel row that
-// opened the guide). Rows advertise a stable `data-focus-key`; App records the
-// last focused key per screen and restores it on (re)entry.
+// opened the guide). Rows advertise a stable `data-focus-key`; the app records
+// the last focused key under a screen key of its choosing (this module stays
+// app-agnostic) and restores it on (re)entry.
 
 export const focusMemory = new Map<string, string>();
-
-export function screenKeyOf(s: Screen): string {
-  switch (s.name) {
-    case "player":
-    case "epg":
-      return `${s.name}:${s.playlistId}:${s.channelId}`;
-    case "edit":
-    case "share":
-      return `${s.name}:${s.playlistId}`;
-    default:
-      return s.name;
-  }
-}
 
 /**
  * Entry focus for a screen: the remembered element if it still exists, else

@@ -2,6 +2,7 @@ import type { Channel, ChannelEpg, Playlist, Programme } from "@/types";
 import { getBridge } from "@/lib/bridge";
 import { cachedFetchText } from "@/lib/epg-cache";
 import { resolveTvgId, channelMeta } from "@/lib/epg-directory";
+import { isHttpUrl } from "@/lib/url";
 
 // EPG = the programmes for a channel, read on demand from an XMLTV feed.
 //
@@ -16,7 +17,6 @@ import { resolveTvgId, channelMeta } from "@/lib/epg-directory";
 const XMLTV_TTL_MS = 6 * 3_600_000; // guides change ~daily; 6h is plenty fresh
 const MAX_PROGRAMMES = 500; // per channel — memory bound on a hostile/huge guide
 const MAX_UPCOMING = 30; // programmes surfaced in the panel
-const SAFE_URL = /^https?:\/\//i;
 
 export type EpgErrorCode = "no-source" | "no-id" | "no-programmes" | "fetch-failed";
 
@@ -81,7 +81,7 @@ function parseProgrammeBlock(block: string, channelId: string): Programme | null
     title: text("title") || "Untitled programme",
     desc: text("desc"),
     category: text("category"),
-    icon: iconSrc && SAFE_URL.test(iconSrc) ? iconSrc : undefined, // http(s) only
+    icon: isHttpUrl(iconSrc) ? iconSrc : undefined, // http(s) only
   };
 }
 
@@ -94,6 +94,14 @@ export function extractChannelProgrammes(xml: string, channelId: string): Progra
   while (out.length < MAX_PROGRAMMES) {
     const start = xml.indexOf(OPEN, from);
     if (start < 0) break;
+    const tagEnd = xml.indexOf(">", start);
+    if (tagEnd < 0) break;
+    // A (DTD-invalid) self-closing <programme/> has no closing tag of its own —
+    // matching CLOSE would swallow the NEXT entry. Skip just the tag.
+    if (xml[tagEnd - 1] === "/") {
+      from = tagEnd + 1;
+      continue;
+    }
     const close = xml.indexOf(CLOSE, start);
     if (close < 0) break;
     const end = close + CLOSE.length;
@@ -108,17 +116,23 @@ export function extractChannelProgrammes(xml: string, channelId: string): Progra
 
 // ── now / next ───────────────────────────────────────────────────────────────
 
+/**
+ * Current programme at `at` + the one right after, from a list sorted by start.
+ * Single authority for the guide UIs too (they re-derive on a live clock).
+ */
+export function nowAndNext(sorted: Programme[], at: number): { now?: Programme; next?: Programme } {
+  const now = sorted.find((p) => p.start <= at && at < p.stop);
+  const next = now ? sorted[sorted.indexOf(now) + 1] : sorted.find((p) => p.start > at);
+  return { now, next };
+}
+
 function computeNowNext(
   programmes: Programme[],
   at: number,
 ): { now?: Programme; next?: Programme; upcoming: Programme[] } {
   const sorted = [...programmes].sort((a, b) => a.start - b.start);
-  const now = sorted.find((p) => p.start <= at && at < p.stop);
-  let next: Programme | undefined;
-  if (now) next = sorted[sorted.indexOf(now) + 1];
-  else next = sorted.find((p) => p.start > at);
   const upcoming = sorted.filter((p) => p.stop > at).slice(0, MAX_UPCOMING);
-  return { now, next, upcoming };
+  return { ...nowAndNext(sorted, at), upcoming };
 }
 
 /** Fraction [0,1] of `p` elapsed at `at` — drives the progress bar. */
@@ -151,7 +165,13 @@ export async function getChannelEpg(
   // (loads it on demand) only when the channel carries no tvg-id.
   let channelId = channel.tvgId?.trim();
   if (!channelId) {
-    channelId = await resolveTvgId(bridge, channel.name);
+    // Keep the "always throws EpgError" contract: a directory fetch failure
+    // must surface as a presentable message, not a raw HTTP error.
+    try {
+      channelId = await resolveTvgId(bridge, channel.name);
+    } catch {
+      throw new EpgError("fetch-failed", "Could not load the channel directory — try again.");
+    }
     if (!channelId) {
       throw new EpgError("no-id", "This channel has no tvg-id and no match in the iptv-org directory.");
     }

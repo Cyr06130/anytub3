@@ -25,20 +25,26 @@ export function getBridge(): Promise<HostBridge> {
       inHost = false;
     }
 
-    let bridge: HostBridge;
+    let bridge: HostBridge | null = null;
     if (inHost) {
+      // init() is part of the fallback boundary: a real bridge that loads but
+      // fails to initialize (login/accounts) must degrade to the mock too —
+      // otherwise the rejected promise is cached and every later getBridge()
+      // fails with it.
       try {
         const { createRealBridge } = await import("./real");
         bridge = await createRealBridge();
+        await bridge.init();
       } catch (e) {
         console.warn("[AnyTub3] Host bridge unavailable, falling back to mock:", e);
-        bridge = createMockBridge();
+        bridge = null;
       }
-    } else {
+    }
+    if (!bridge) {
       bridge = createMockBridge();
+      await bridge.init();
     }
 
-    await bridge.init();
     singleton = bridge;
     return bridge;
   })();
@@ -46,8 +52,7 @@ export function getBridge(): Promise<HostBridge> {
   return pending;
 }
 
-/** Synchronous accessor — only valid after getBridge() has resolved. */
-export function bridgeSync(): HostBridge {
-  if (!singleton) throw new Error("Bridge not initialized — call getBridge() first");
+/** Synchronous best-effort accessor — null until getBridge() has resolved. */
+export function bridgeIfReady(): HostBridge | null {
   return singleton;
 }

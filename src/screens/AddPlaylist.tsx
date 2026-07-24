@@ -5,6 +5,7 @@ import { addPlaylist, addPlaylistFromUrl, goBack, importShareCode } from "@/stat
 import { parseM3U, parseM3UHeader, deriveTitle } from "@/lib/m3u";
 import { SAMPLE_M3U } from "@/lib/sample";
 import { isTv } from "@/lib/tv";
+import { isHttpUrl } from "@/lib/url";
 import { ScreenHeader } from "@/components/ScreenHeader";
 
 /**
@@ -28,13 +29,14 @@ export function AddPlaylist() {
   }
 
   async function loadUrl() {
-    if (!/^https?:\/\//i.test(url)) {
+    const trimmed = url.trim();
+    if (!isHttpUrl(trimmed)) {
       setInvalid(true);
       return;
     }
     setBusy(true);
     try {
-      await addPlaylistFromUrl(url.trim());
+      await addPlaylistFromUrl(trimmed);
       goBack();
     } catch {
       setInvalid(true);

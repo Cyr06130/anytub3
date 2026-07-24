@@ -1,8 +1,8 @@
 import { getBridge } from "@/lib/bridge";
+import { base64UrlFromBytes, bytesFromBase64Url, utf8 } from "@/lib/bytes";
 import { SHARE_MESSAGE_TYPE } from "@/lib/config";
 import type { SharePointer } from "@/types";
 
-const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 /** Prefix on the copyable share code (a bearer pointer, like a magnet link). */
@@ -16,7 +16,7 @@ function toPointer(p: OutgoingPointer): SharePointer {
 }
 
 function encodePointer(p: OutgoingPointer): Uint8Array {
-  return encoder.encode(JSON.stringify(toPointer(p)));
+  return utf8(JSON.stringify(toPointer(p)));
 }
 
 // ── Share code (base64url, host-independent) ─────────────────────────────────
@@ -25,24 +25,23 @@ function encodePointer(p: OutgoingPointer): Uint8Array {
 // the content key in clear: whoever holds it can fetch+decrypt the playlist
 // (bearer semantics — the user chooses a trusted channel to send it).
 
-function b64urlEncode(bytes: Uint8Array): string {
-  let s = "";
-  for (const b of bytes) s += String.fromCharCode(b);
-  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function b64urlDecode(s: string): Uint8Array {
-  const b64 = s.replace(/-/g, "+").replace(/_/g, "/");
-  const padded = b64 + (b64.length % 4 ? "=".repeat(4 - (b64.length % 4)) : "");
-  const bin = atob(padded);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-
 /** Encode a pointer as a copyable `anytub3:` share code. */
 export function encodeShareCode(p: OutgoingPointer): string {
-  return SHARE_CODE_PREFIX + b64urlEncode(encodePointer(p));
+  return SHARE_CODE_PREFIX + base64UrlFromBytes(encodePointer(p));
+}
+
+/**
+ * Parse + validate untrusted pointer bytes — the single gate for both delivery
+ * paths (pasted share code, host-chat message). Null unless it's one of ours.
+ */
+function parsePointer(bytes: Uint8Array): SharePointer | null {
+  try {
+    const ptr = JSON.parse(decoder.decode(bytes)) as SharePointer;
+    if (ptr?.v === 1 && ptr.playlistCid && Array.isArray(ptr.key)) return ptr;
+  } catch {
+    /* malformed — not one of ours */
+  }
+  return null;
 }
 
 /** Decode a share code (with or without the prefix); null if malformed. */
@@ -51,12 +50,10 @@ export function decodeShareCode(code: string): SharePointer | null {
   const body = trimmed.startsWith(SHARE_CODE_PREFIX) ? trimmed.slice(SHARE_CODE_PREFIX.length) : trimmed;
   if (!body) return null;
   try {
-    const ptr = JSON.parse(decoder.decode(b64urlDecode(body))) as SharePointer;
-    if (ptr?.v === 1 && ptr.playlistCid && Array.isArray(ptr.key)) return ptr;
+    return parsePointer(bytesFromBase64Url(body));
   } catch {
-    /* malformed code */
+    return null; // not base64
   }
-  return null;
 }
 
 /**
@@ -80,12 +77,8 @@ export async function sharePlaylist(p: OutgoingPointer): Promise<void> {
 export async function listenShares(onPointer: (ptr: SharePointer) => void): Promise<() => void> {
   const bridge = await getBridge();
   return bridge.subscribeCustom(SHARE_MESSAGE_TYPE, (payload) => {
-    try {
-      const ptr = JSON.parse(decoder.decode(payload)) as SharePointer;
-      if (ptr?.v === 1 && ptr.playlistCid && Array.isArray(ptr.key)) onPointer(ptr);
-    } catch {
-      /* malformed payload — ignore */
-    }
+    const ptr = parsePointer(payload);
+    if (ptr) onPointer(ptr);
   });
 }
 

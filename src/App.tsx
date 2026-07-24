@@ -6,7 +6,21 @@ import { bootstrap, goBack, goLibrary, useApp } from "@/state/store";
 import type { Screen } from "@/state/store";
 import { isTv } from "@/lib/tv";
 import { installTvInput, pushKeyHandler } from "@/lib/tv-input";
-import { focusMemory, focusScreen, installTvNav, screenKeyOf } from "@/lib/tv-nav";
+import { focusMemory, focusScreen, installTvNav } from "@/lib/tv-nav";
+
+/** Stable key for the TV focus memory — one slot per distinct screen target. */
+function screenKeyOf(s: Screen): string {
+  switch (s.name) {
+    case "player":
+    case "epg":
+      return `${s.name}:${s.playlistId}:${s.channelId}`;
+    case "edit":
+    case "share":
+      return `${s.name}:${s.playlistId}`;
+    default:
+      return s.name;
+  }
+}
 import { Library } from "@/screens/Library";
 import { AddPlaylist } from "@/screens/AddPlaylist";
 import { ShareSheet } from "@/screens/ShareSheet";

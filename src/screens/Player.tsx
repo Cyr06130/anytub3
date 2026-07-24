@@ -1,12 +1,12 @@
 import { useRef, useState } from "react";
-import { Button, Badge, Tooltip, ListItem } from "@novasamatech/tr-ui";
-import { toastError } from "@novasamatech/tr-ui";
-import { ArrowLeft, Share2, Tv, X } from "lucide-react";
+import { Button, Badge, Tooltip, toastError } from "@novasamatech/tr-ui";
+import { ArrowLeft, Share2, X } from "lucide-react";
 import { HlsPlayer, type HlsPlayerApi } from "@/player/HlsPlayer";
-import { goLibrary, getState, navigate, tune, useApp } from "@/state/store";
+import { goLibrary, navigate, tune, useApp } from "@/state/store";
 import type { Screen } from "@/state/store";
 import type { Channel } from "@/types";
 import { isTv } from "@/lib/tv";
+import { ChannelRow } from "@/components/ChannelRow";
 import { EpgButton, EpgView } from "@/components/EpgPanel";
 import { PlayerOverlay } from "@/components/PlayerOverlay";
 
@@ -15,9 +15,10 @@ type PlayerProps = {
 };
 
 export function PlayerScreen({ screen }: PlayerProps) {
-  // Subscribe so the sidebar highlight follows live handoffs.
-  const { nowPlayingChannelId } = useApp();
-  const playlist = getState().playlists.find((p) => p.id === screen.playlistId);
+  // Subscribe so the sidebar highlight follows live handoffs (and the playlist
+  // stays fresh through the same subscription — never read unsubscribed state).
+  const { nowPlayingChannelId, playlists } = useApp();
+  const playlist = playlists.find((p) => p.id === screen.playlistId);
   const channel = playlist?.entries.find((c) => c.id === screen.channelId);
   // Channel whose guide is shown INLINE in the aside (the stream keeps playing —
   // navigating to the epg screen would unmount the player).
@@ -109,31 +110,15 @@ export function PlayerScreen({ screen }: PlayerProps) {
             <>
               <h2 className="text-fg-secondary px-1 text-sm font-medium">{playlist.title}</h2>
               <div className="border-border-secondary flex max-h-[60vh] flex-col overflow-y-auto rounded-[12px] border">
-                {playlist.entries.map((ch) => {
-                  const active = ch.id === (nowPlayingChannelId ?? screen.channelId);
-                  return (
-                    <div
-                      key={ch.id}
-                      className={`flex items-center gap-1 pr-2 ${active ? "bg-bg-selection-container-hover" : "hover:bg-bg-selection-container-hover focus-within:bg-bg-selection-container-hover"}`}
-                    >
-                      <button
-                        onClick={() => void tune(playlist.id, ch)}
-                        aria-current={active}
-                        data-focus-key={ch.id}
-                        className="min-w-0 flex-1 text-left"
-                      >
-                        <ListItem
-                          variant="icon-label"
-                          icon={<Tv />}
-                          title={ch.name}
-                          description={ch.group}
-                          trailingLabel={active ? <Badge variant="primary">Live</Badge> : undefined}
-                        />
-                      </button>
-                      <EpgButton onClick={() => setGuide(ch)} />
-                    </div>
-                  );
-                })}
+                {playlist.entries.map((ch) => (
+                  <ChannelRow
+                    key={ch.id}
+                    channel={ch}
+                    active={ch.id === (nowPlayingChannelId ?? screen.channelId)}
+                    onTune={() => void tune(playlist.id, ch)}
+                    onGuide={() => setGuide(ch)}
+                  />
+                ))}
               </div>
             </>
           )}
