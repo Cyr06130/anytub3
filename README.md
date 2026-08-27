@@ -117,7 +117,13 @@ src/
 │  └─ sample.ts        # demo playlist (test HLS streams)
 ├─ player/HlsPlayer.tsx
 ├─ screens/            # Library · Player · AddPlaylist · ShareSheet (TrUI)
-├─ state/store.ts      # app state + orchestration of the 4 flows + resume algo
+├─ state/              # app state + actions, one module per responsibility
+│  ├─ app-state.ts     # state container (useApp / getState / setState)
+│  ├─ navigation.ts    # screen stack (navigate / goBack / teleports)
+│  ├─ playlists.ts     # playlist CRUD + tune (save → CID → republish index)
+│  ├─ sharing.ts       # share codes + chat share + import
+│  ├─ bootstrap.ts     # boot + resume algorithm + cross-host subscriptions
+│  └─ demo.ts          # off-host simulation hooks (window.__anytub3, e2e)
 ├─ HostThemeBridge.tsx # host theme → TrUI setMode
 ├─ App.tsx · main.tsx
 └─ styles/app.css      # Tailwind v4 + TrUI tokens (styles.css + preset)
@@ -147,7 +153,7 @@ Two-level state:
 
 **Resume algorithm** (on opening, any host): restore the library from
 `library-head` → resume the freshest `now-playing` (channel vs cache) → subscribe to remote
-changes (handoff) and incoming shares. See `state/store.ts → bootstrap()`.
+changes (handoff) and incoming shares. See `state/bootstrap.ts → bootstrap()`.
 
 Keys: `deriveEntropy(ctx)` (RFC-0007, deterministic/wallet) → `KeyManager.fromRawKey`, **not**
 `fromSignature` (sr25519 signatures are non-deterministic — unsuitable cross-host). Context

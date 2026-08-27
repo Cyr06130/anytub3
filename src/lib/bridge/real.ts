@@ -1,6 +1,8 @@
 import type { ChannelStore as ChannelStoreT } from "@parity/product-sdk-statement-store";
 import type { CloudStorageClient as CloudStorageClientT } from "@parity/product-sdk-cloud-storage";
+import { cidToPreimageKey, hashToCid } from "@/lib/cid";
 import { CLOUD_ENVIRONMENT, DOTNS_IDENTIFIER, APP_NAME, PRODUCT_DERIVATION_INDEX, SHARE_ROOM, STATEMENT_TTL_SECONDS } from "@/lib/config";
+import { errorMessage } from "@/lib/errors";
 import type { ChannelEnvelope, ChannelLike, HostBridge } from "./types";
 import { isHttpUrl } from "@/lib/url";
 
@@ -17,15 +19,69 @@ const REAL_LOCAL_PREFIX = "anytub3.local.";
 
 type HostMod = typeof import("@parity/product-sdk-host");
 type ProductAccount = { dotNsIdentifier: string; derivationIndex: number; publicKey: Uint8Array };
+type PreimageManager = NonNullable<Awaited<ReturnType<HostMod["getPreimageManager"]>>>;
+
+const HOST_READY_TIMEOUT_MS = 15_000;
+const HOST_READY_POLL_MS = 250;
+
+/**
+ * Wait for the host's TruAPI handshake to complete. `isInsideContainer()` is a
+ * synchronous heuristic (iframe/webview marker), but every service getter
+ * (`getPreimageManager`, `getAccountsProvider`, `getStatementStore`, …) returns
+ * null until the transport is actually CONNECTED — resolving them during the
+ * handshake races it and freezes the bridge into a session-long "Bulletin
+ * storage unavailable (preimage manager missing)" state. Resolves false when
+ * the host never comes up within the timeout.
+ */
+export async function waitForTruApi(
+  host: Pick<HostMod, "getTruApi">,
+  opts: { timeoutMs?: number; pollMs?: number } = {},
+): Promise<boolean> {
+  const { timeoutMs = HOST_READY_TIMEOUT_MS, pollMs = HOST_READY_POLL_MS } = opts;
+  const deadline = Date.now() + timeoutMs;
+  do {
+    if (await host.getTruApi()) return true;
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  } while (Date.now() < deadline);
+  return (await host.getTruApi()) != null;
+}
+
+const PREIMAGE_LOOKUP_TIMEOUT_MS = 30_000;
+
+/** Resolve a preimage's bytes via the host's lookup subscription, or time out. */
+function lookupPreimageBytes(preimage: PreimageManager, key: `0x${string}`): Promise<Uint8Array> {
+  return new Promise<Uint8Array>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      sub?.unsubscribe?.();
+      reject(new Error("Bulletin read timed out"));
+    }, PREIMAGE_LOOKUP_TIMEOUT_MS);
+    const sub = preimage.lookup(key, (data) => {
+      if (settled) return;
+      // lookup is a subscription: while the preimage isn't available it may
+      // fire with empty/undefined data. Ignore those and keep waiting (a
+      // later callback delivers the bytes), else we'd resolve null and the
+      // caller would decrypt garbage. Genuine misses fall through to timeout.
+      const bytes = data as Uint8Array | null | undefined;
+      if (!bytes || bytes.length === 0) return;
+      settled = true;
+      clearTimeout(timer);
+      sub?.unsubscribe?.();
+      resolve(bytes);
+    });
+  });
+}
 
 export async function createRealBridge(): Promise<HostBridge> {
   // Loaded in init(); getBridge() awaits init() before returning.
   let host!: HostMod;
   let accountsProvider: Awaited<ReturnType<HostMod["getAccountsProvider"]>> = null;
   let productAccount: ProductAccount | null = null;
-  let csMod: typeof import("@parity/product-sdk-cloud-storage") | null = null;
-  let preimage: Awaited<ReturnType<HostMod["getPreimageManager"]>> = null;
+  let preimage: PreimageManager | null = null;
   let cloudClient: CloudStorageClientT | null = null;
+  let bulletinInitError: unknown = null;
   let ssc: import("@parity/product-sdk-statement-store").StatementStoreClient | null = null;
   let ChannelStoreCtor: typeof ChannelStoreT | null = null;
   const channels = new Map<string, ChannelLike>();
@@ -36,6 +92,52 @@ export async function createRealBridge(): Promise<HostBridge> {
       productAccount?.dotNsIdentifier ?? DOTNS_IDENTIFIER,
       productAccount?.derivationIndex ?? PRODUCT_DERIVATION_INDEX,
     ];
+  }
+
+  /** Resolve (and cache) the sponsored preimage manager. Retried on every call:
+   *  a transient failure at init must not condemn Bulletin for the session. */
+  async function ensurePreimage(): Promise<PreimageManager | null> {
+    if (preimage) return preimage;
+    try {
+      preimage = await host.getPreimageManager();
+      if (preimage) bulletinInitError = null;
+    } catch (e) {
+      bulletinInitError = e;
+      console.warn("[AnyTub3] getPreimageManager:", e);
+    }
+    return preimage;
+  }
+
+  /** Fallback for hosts without a preimage manager: a direct Bulletin client.
+   *  Loaded lazily — the cloud-storage package drags polkadot-api plus ~2MB of
+   *  chain-metadata chunks, and that load failing must never take down the
+   *  sponsored path (it used to: both lived in one try). Retried per call. */
+  async function ensureCloudClient(): Promise<CloudStorageClientT | null> {
+    if (cloudClient) return cloudClient;
+    try {
+      const csMod = await import("@parity/product-sdk-cloud-storage");
+      const signer = csMod.createLazySigner(
+        () =>
+          accountsProvider && productAccount
+            ? accountsProvider.getProductAccountSigner(productAccount)
+            : null,
+        "AnyTub3: no product account available",
+      );
+      cloudClient = await csMod.CloudStorageClient.create({ environment: CLOUD_ENVIRONMENT, signer });
+      bulletinInitError = null;
+    } catch (e) {
+      bulletinInitError = e;
+      console.warn("[AnyTub3] CloudStorageClient init:", e);
+    }
+    return cloudClient;
+  }
+
+  /** Both Bulletin paths failed — say WHY, not just that they did. */
+  function bulletinUnavailable(operation: string): Error {
+    const cause = bulletinInitError
+      ? ` — ${errorMessage(bulletinInitError)}`
+      : " (host exposes no preimage manager and no direct client could connect)";
+    return new Error(`Bulletin ${operation} unavailable${cause}`);
   }
 
   type ChatManager = NonNullable<Awaited<ReturnType<HostMod["getChatManager"]>>>;
@@ -59,6 +161,14 @@ export async function createRealBridge(): Promise<HostBridge> {
     async init() {
       host = await import("@parity/product-sdk-host");
 
+      // 0. Gate on the transport: without this, a slow handshake makes every
+      //    service below resolve null and the session boots half-dead. On a
+      //    genuine timeout, throw — getBridge()'s fallback boundary then hands
+      //    the app to the mock bridge instead of a broken real one.
+      if (!(await waitForTruApi(host))) {
+        throw new Error("Host transport not ready (TruAPI handshake timed out)");
+      }
+
       // 1. Accounts: ensure the host session is connected, resolve the product account.
       accountsProvider = await host.getAccountsProvider();
       if (accountsProvider) {
@@ -80,25 +190,11 @@ export async function createRealBridge(): Promise<HostBridge> {
       }
 
       // 2. Bulletin storage. Prefer the host preimage manager — it submits on
-      //    our behalf, sponsored via the granted BulletinAllowance (no direct
-      //    Bulletin RPC connection or product signer required). Fall back to a
-      //    direct CloudStorageClient only if the host doesn't expose one.
-      try {
-        csMod = await import("@parity/product-sdk-cloud-storage");
-        preimage = await host.getPreimageManager();
-        if (!preimage) {
-          const signer = csMod.createLazySigner(
-            () =>
-              accountsProvider && productAccount
-                ? accountsProvider.getProductAccountSigner(productAccount)
-                : null,
-            "AnyTub3: no product account available",
-          );
-          cloudClient = await csMod.CloudStorageClient.create({ environment: CLOUD_ENVIRONMENT, signer });
-        }
-      } catch (e) {
-        console.warn("[AnyTub3] Bulletin storage init:", e);
-      }
+      //    our behalf, sponsored via the implicit BulletinAllowance (no direct
+      //    Bulletin RPC connection or product signer required). The direct
+      //    CloudStorageClient fallback is resolved lazily at first use, so its
+      //    heavyweight chunk graph can never gate the sponsored path.
+      await ensurePreimage();
 
       // 3. Statement Store, connected in sponsored host mode (no per-update signing).
       try {
@@ -136,38 +232,25 @@ export async function createRealBridge(): Promise<HostBridge> {
     },
 
     async deriveEntropy(context: Uint8Array) {
-      return host.deriveEntropy(context);
-    },
-
-    async preallocate() {
-      try {
-        const outcomes = await host.requestResourceAllocation([
-          host.enumValue("BulletinAllowance", undefined),
-          host.enumValue("StatementStoreAllowance", undefined),
-        ]);
-        // Outcome tags: "Allocated" | "Rejected" | "NotAvailable".
-        const granted = outcomes.every((o) => o.tag !== "Rejected");
-        console.info("[AnyTub3] allowances:", outcomes.map((o) => o.tag).join(", "));
-        return granted;
-      } catch (e) {
-        console.warn("[AnyTub3] preallocate:", e);
-        return false;
-      }
+      const result = await host.deriveEntropy(context);
+      if (!result.ok) throw new Error(`deriveEntropy: ${host.formatHostError(result.error)}`);
+      return result.value;
     },
 
     async cloudStore(bytes: Uint8Array) {
       // Sponsored host path: submit → preimage key → CID (interoperable pointer).
-      if (preimage && csMod) {
-        const key = (await preimage.submit(bytes)) as `0x${string}`;
-        return csMod.hashToCid(key);
+      const pm = await ensurePreimage();
+      if (pm) {
+        return hashToCid(await pm.submit(bytes));
       }
-      if (cloudClient) {
-        const result = await cloudClient.store(bytes).send();
+      const client = await ensureCloudClient();
+      if (client) {
+        const result = await client.store(bytes).send();
         const cid = result.cid?.toString();
         if (!cid) throw new Error("Cloud Storage: missing CID in receipt");
         return cid;
       }
-      throw new Error("Bulletin storage unavailable (preimage manager missing)");
+      throw bulletinUnavailable("save");
     },
 
     async cloudFetch(cid: string) {
@@ -176,33 +259,17 @@ export async function createRealBridge(): Promise<HostBridge> {
       if (cid.startsWith("bafymock")) {
         throw new Error("This share code was created in demo mode and can't be opened inside the host.");
       }
-      if (preimage && csMod) {
-        const key = csMod.cidToPreimageKey(cid);
-        return await new Promise<Uint8Array>((resolve, reject) => {
-          let settled = false;
-          const timer = setTimeout(() => {
-            if (settled) return;
-            settled = true;
-            sub?.unsubscribe?.();
-            reject(new Error("Bulletin read timed out"));
-          }, 30_000);
-          const sub = preimage!.lookup(key, (data) => {
-            if (settled) return;
-            // lookup is a subscription: while the preimage isn't available it may
-            // fire with empty/undefined data. Ignore those and keep waiting (a
-            // later callback delivers the bytes), else we'd resolve null and the
-            // caller would decrypt garbage. Genuine misses fall through to timeout.
-            const bytes = data as Uint8Array | null | undefined;
-            if (!bytes || bytes.length === 0) return;
-            settled = true;
-            clearTimeout(timer);
-            sub?.unsubscribe?.();
-            resolve(bytes);
-          });
-        });
+      const pm = await ensurePreimage();
+      if (pm) {
+        return lookupPreimageBytes(pm, cidToPreimageKey(cid));
       }
-      if (cloudClient) return cloudClient.fetchBytes(cid);
-      throw new Error("Bulletin read unavailable (preimage manager missing)");
+      const client = await ensureCloudClient();
+      if (client) {
+        const result = await client.fetchBytes(cid);
+        if (!result.ok) throw result.error;
+        return result.value;
+      }
+      throw bulletinUnavailable("read");
     },
 
     async httpGet(url: string) {
@@ -223,7 +290,10 @@ export async function createRealBridge(): Promise<HostBridge> {
       const store: ChannelStoreT<ChannelEnvelope> = new ChannelStoreCtor<ChannelEnvelope>(ssc, { topic2 });
       ch = {
         async write(channelName, value) {
-          await store.write(channelName, value);
+          // ChannelStore.write returns a Result and never throws (SDK ≥0.6) —
+          // a rejected statement must surface to the caller, not vanish.
+          const result = await store.write(channelName, value);
+          if (!result.ok) throw result.error;
         },
         read(channelName) {
           return store.read(channelName);
@@ -257,7 +327,10 @@ export async function createRealBridge(): Promise<HostBridge> {
       const chat = await host.getChatManager();
       if (!chat) throw new Error("Chat unavailable");
       await ensureShareRoom(chat);
-      await chat.sendMessage(SHARE_ROOM.roomId, { tag: "Custom", value: { messageType, payload } });
+      await chat.sendMessage(SHARE_ROOM.roomId, {
+        tag: "Custom",
+        value: { messageType, payload: host.toHex(payload) },
+      });
     },
 
     subscribeCustom(messageType: string, cb) {
@@ -275,7 +348,7 @@ export async function createRealBridge(): Promise<HostBridge> {
           if (p.tag !== "MessagePosted") return;
           const content = p.value; // ChatMessageContent
           if (content.tag === "Custom" && content.value.messageType === messageType) {
-            cb(content.value.payload, action.peer);
+            cb(host.fromHex(content.value.payload), action.peer);
           }
         });
       })();

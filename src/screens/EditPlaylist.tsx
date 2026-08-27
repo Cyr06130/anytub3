@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { Input, Button, ListItem } from "@novasamatech/tr-ui";
 import { Tv, X } from "lucide-react";
 import type { Channel } from "@/types";
-import { goBack, updatePlaylist, useApp } from "@/state/store";
+import { useApp } from "@/state/app-state";
+import { goBack } from "@/state/navigation";
+import { updatePlaylist } from "@/state/playlists";
 import { ScreenHeader } from "@/components/ScreenHeader";
 
 type EditProps = {

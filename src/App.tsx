@@ -2,11 +2,20 @@ import { lazy, Suspense, useEffect, useRef } from "react";
 import { ProductHeader, Badge, Button, Tooltip, useTheme, toastError } from "@novasamatech/tr-ui";
 import { Moon, Sun } from "lucide-react";
 import anytubIcon from "@/assets/anytub3.svg";
-import { bootstrap, goBack, goLibrary, useApp } from "@/state/store";
-import type { Screen } from "@/state/store";
+import { useApp } from "@/state/app-state";
+import type { Screen } from "@/state/app-state";
+import { bootstrap } from "@/state/bootstrap";
+import { goBack, goLibrary } from "@/state/navigation";
+import { errorMessage } from "@/lib/errors";
 import { isTv } from "@/lib/tv";
 import { installTvInput, pushKeyHandler } from "@/lib/tv-input";
 import { focusMemory, focusScreen, installTvNav } from "@/lib/tv-nav";
+import { Library } from "@/screens/Library";
+import { AddPlaylist } from "@/screens/AddPlaylist";
+import { ShareSheet } from "@/screens/ShareSheet";
+import { EditPlaylist } from "@/screens/EditPlaylist";
+import { EpgGuide } from "@/screens/EpgGuide";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 /** Stable key for the TV focus memory — one slot per distinct screen target. */
 function screenKeyOf(s: Screen): string {
@@ -21,12 +30,6 @@ function screenKeyOf(s: Screen): string {
       return s.name;
   }
 }
-import { Library } from "@/screens/Library";
-import { AddPlaylist } from "@/screens/AddPlaylist";
-import { ShareSheet } from "@/screens/ShareSheet";
-import { EditPlaylist } from "@/screens/EditPlaylist";
-import { EpgGuide } from "@/screens/EpgGuide";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 // The player pulls in hls.js (~530 kB min) and is only needed once a channel is
 // tuned — lazy-load it so the library (first paint) stays light.
@@ -135,8 +138,7 @@ export function App() {
       toastError({ title: "Unexpected error", description: msg });
     };
     const onError = (e: ErrorEvent) => report(e.message || String(e.error ?? ""));
-    const onRejection = (e: PromiseRejectionEvent) =>
-      report(e.reason instanceof Error ? e.reason.message : String(e.reason ?? ""));
+    const onRejection = (e: PromiseRejectionEvent) => report(errorMessage(e.reason ?? ""));
     window.addEventListener("error", onError);
     window.addEventListener("unhandledrejection", onRejection);
     return () => {

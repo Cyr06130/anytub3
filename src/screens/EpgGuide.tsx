@@ -1,4 +1,4 @@
-import { useApp } from "@/state/store";
+import { useApp } from "@/state/app-state";
 import { EpgView } from "@/components/EpgPanel";
 import { ScreenHeader } from "@/components/ScreenHeader";
 

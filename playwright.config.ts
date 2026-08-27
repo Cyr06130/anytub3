@@ -12,7 +12,11 @@ export default defineConfig({
     trace: "on-first-retry",
   },
   webServer: {
-    command: "npx vite preview --port 4173 --strictPort",
+    // e2e runs against the PRODUCTION bundle — always rebuild it first, or the
+    // suite silently validates stale code. (With reuseExistingServer, a preview
+    // server left running skips this command: rebuilds are still picked up from
+    // disk, but only if you rebuild yourself.)
+    command: "npm run build && npx vite preview --port 4173 --strictPort",
     url: "http://localhost:4173",
     timeout: 120_000,
     reuseExistingServer: true,

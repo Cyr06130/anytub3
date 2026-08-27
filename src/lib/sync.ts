@@ -1,6 +1,7 @@
-import { aesGcmEncryptPacked, aesGcmDecryptPacked, bytesToHex } from "@parity/product-sdk-crypto";
+import { bytesToHex } from "@parity/product-sdk-crypto";
 import { bridgeIfReady, getBridge } from "@/lib/bridge";
 import { utf8 } from "@/lib/bytes";
+import { openEnvelope, sealEnvelope } from "@/lib/envelope";
 import type { ChannelEnvelope, ChannelLike } from "@/lib/bridge";
 import {
   KEY_CTX,
@@ -9,8 +10,6 @@ import {
   LIB_HEARTBEAT_MS,
 } from "@/lib/config";
 import type { LibraryHead, NowPlaying } from "@/types";
-
-const decoder = new TextDecoder();
 
 // ── Generic encrypted, last-write-wins channel ───────────────────────────────
 // Envelope = { timestamp (clear, LWW key), ct (AES-GCM packed payload) }.
@@ -42,10 +41,10 @@ class SyncChannel<T> {
   }
 
   private seal(payload: T, timestamp: number): ChannelEnvelope {
-    return { timestamp, ct: Array.from(aesGcmEncryptPacked(utf8(JSON.stringify(payload)), this.key)) };
+    return sealEnvelope(payload, this.key, timestamp);
   }
   private open(e: ChannelEnvelope): T {
-    return JSON.parse(decoder.decode(aesGcmDecryptPacked(new Uint8Array(e.ct), this.key))) as T;
+    return openEnvelope<T>(e, this.key);
   }
 
   async publish(payload: T, timestamp: number): Promise<void> {
@@ -88,6 +87,24 @@ let ready = false;
 const NP_CACHE_KEY = "now-playing";
 const LIB_CACHE_KEY = "library-head";
 
+type BridgeHandle = Awaited<ReturnType<typeof getBridge>>;
+
+/** Derive the channel name + encryption key from wallet entropy and construct
+ *  the channel. Null (not a throw) when the underlying store is unavailable. */
+async function wireChannel<T>(
+  bridge: BridgeHandle,
+  opts: { topic: string; namePrefix: string; nameCtx: string; encCtx: string; label: string },
+): Promise<SyncChannel<T> | null> {
+  try {
+    const name = `${opts.namePrefix}${bytesToHex(await bridge.deriveEntropy(utf8(opts.nameCtx)))}`;
+    const key = await bridge.deriveEntropy(utf8(opts.encCtx));
+    return new SyncChannel<T>(bridge.channel(opts.topic), key, name);
+  } catch (e) {
+    console.warn(`[AnyTub3] ${opts.label} channel unavailable:`, e);
+    return null;
+  }
+}
+
 /**
  * Derive channel name + key and wire both channels. Idempotent. A channel that
  * cannot be wired (e.g. the Statement Store is down — the real bridge tolerates
@@ -97,23 +114,20 @@ const LIB_CACHE_KEY = "library-head";
 export async function initSync(): Promise<void> {
   if (ready) return;
   const bridge = await getBridge();
-
-  try {
-    const npName = `anytub3/np/${bytesToHex(await bridge.deriveEntropy(utf8(KEY_CTX.npChannel)))}`;
-    const npKey = await bridge.deriveEntropy(utf8(KEY_CTX.npEnc));
-    np = new SyncChannel<NowPlaying>(bridge.channel(TOPIC.nowPlaying), npKey, npName);
-  } catch (e) {
-    console.warn("[AnyTub3] now-playing channel unavailable:", e);
-  }
-
-  try {
-    const libName = `anytub3/lib/${bytesToHex(await bridge.deriveEntropy(utf8(KEY_CTX.libChannel)))}`;
-    const libKey = await bridge.deriveEntropy(utf8(KEY_CTX.libEnc));
-    lib = new SyncChannel<LibraryHead>(bridge.channel(TOPIC.libraryHead), libKey, libName);
-  } catch (e) {
-    console.warn("[AnyTub3] library-head channel unavailable:", e);
-  }
-
+  np = await wireChannel<NowPlaying>(bridge, {
+    topic: TOPIC.nowPlaying,
+    namePrefix: "anytub3/np/",
+    nameCtx: KEY_CTX.npChannel,
+    encCtx: KEY_CTX.npEnc,
+    label: "now-playing",
+  });
+  lib = await wireChannel<LibraryHead>(bridge, {
+    topic: TOPIC.libraryHead,
+    namePrefix: "anytub3/lib/",
+    nameCtx: KEY_CTX.libChannel,
+    encCtx: KEY_CTX.libEnc,
+    label: "library-head",
+  });
   ready = true;
 }
 
@@ -121,10 +135,12 @@ export async function initSync(): Promise<void> {
 
 export async function publishNowPlaying(s: Omit<NowPlaying, "timestamp" | "v">): Promise<NowPlaying> {
   await initSync();
+  const full: NowPlaying = { ...s, v: 1, timestamp: np?.tick() ?? Date.now() };
+  // Cache BEFORE publishing: the per-device cache is what same-device resume
+  // reads on the next launch, so it must never depend on the statement landing.
+  cacheNowPlaying(full);
   if (!np) throw new Error("now-playing channel unavailable");
-  const full: NowPlaying = { ...s, v: 1, timestamp: np.tick() };
   await np.publish(full, full.timestamp);
-  cacheNowPlaying(full); // mirror locally for instant same-device resume
   return full;
 }
 
@@ -138,28 +154,52 @@ export function onNowPlayingChange(cb: (s: NowPlaying) => void): () => void {
   return np.onChange((value) => cb(value));
 }
 
-let npHb: ReturnType<typeof setInterval> | undefined;
+/** Periodic republish while the app is alive — refreshes the statement TTL.
+ *  `start` replaces any running timer; a failed tick only warns (transient). */
+class Heartbeat {
+  private timer: ReturnType<typeof setInterval> | undefined;
+
+  constructor(
+    private readonly intervalMs: number,
+    private readonly label: string,
+  ) {}
+
+  start(tick: () => Promise<void> | undefined): void {
+    this.stop();
+    this.timer = setInterval(() => {
+      void tick()?.catch((e) => console.warn(`[AnyTub3] ${this.label} heartbeat:`, e));
+    }, this.intervalMs);
+  }
+
+  stop(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
+  }
+}
+
+const npHeartbeat = new Heartbeat(NP_HEARTBEAT_MS, "np");
 /** Republish now-playing on a timer to refresh the TTL during playback. */
 export function startNpHeartbeat(get: () => Omit<NowPlaying, "timestamp" | "v"> | null): void {
-  stopNpHeartbeat();
-  npHb = setInterval(() => {
+  npHeartbeat.start(() => {
     const s = get();
-    if (s) publishNowPlaying(s).catch((e) => console.warn("[AnyTub3] np heartbeat:", e));
-  }, NP_HEARTBEAT_MS);
+    return s ? publishNowPlaying(s).then(() => undefined) : undefined;
+  });
 }
 export function stopNpHeartbeat(): void {
-  if (npHb) clearInterval(npHb);
-  npHb = undefined;
+  npHeartbeat.stop();
 }
 
 // ── library-head (durable resume pointer) ────────────────────────────────────
 
 export async function publishLibraryHead(indexCid: string): Promise<void> {
   await initSync();
-  if (!lib) throw new Error("library-head channel unavailable");
-  const head: LibraryHead = { indexCid, ts: lib.tick() };
-  await lib.publish(head, head.ts);
+  const head: LibraryHead = { indexCid, ts: lib?.tick() ?? Date.now() };
+  // Cache BEFORE publishing: cold restore on this device reads the cache, and
+  // the lib heartbeat republishes from it — so a failed/unavailable statement
+  // publish self-heals on the next tick instead of orphaning the library.
   cacheLibraryHead(head);
+  if (!lib) throw new Error("library-head channel unavailable");
+  await lib.publish(head, head.ts);
 }
 
 export function readLibraryHead(): LibraryHead | null {
@@ -171,17 +211,15 @@ export function onLibraryHeadChange(cb: (h: LibraryHead) => void): () => void {
   return lib.onChange((value) => cb(value));
 }
 
-let libHb: ReturnType<typeof setInterval> | undefined;
+const libHeartbeat = new Heartbeat(LIB_HEARTBEAT_MS, "lib");
 export function startLibHeartbeat(get: () => string | null): void {
-  stopLibHeartbeat();
-  libHb = setInterval(() => {
+  libHeartbeat.start(() => {
     const cid = get();
-    if (cid) publishLibraryHead(cid).catch((e) => console.warn("[AnyTub3] lib heartbeat:", e));
-  }, LIB_HEARTBEAT_MS);
+    return cid ? publishLibraryHead(cid) : undefined;
+  });
 }
 export function stopLibHeartbeat(): void {
-  if (libHb) clearInterval(libHb);
-  libHb = undefined;
+  libHeartbeat.stop();
 }
 
 // ── Per-device cache (fast-path; not the source of truth) ─────────────────────

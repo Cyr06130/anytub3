@@ -2,6 +2,7 @@ import type { Channel, ChannelEpg, Playlist, Programme } from "@/types";
 import { getBridge } from "@/lib/bridge";
 import { cachedFetchText } from "@/lib/epg-cache";
 import { resolveTvgId, channelMeta } from "@/lib/epg-directory";
+import { errorMessage } from "@/lib/errors";
 import { isHttpUrl } from "@/lib/url";
 
 // EPG = the programmes for a channel, read on demand from an XMLTV feed.
@@ -181,7 +182,7 @@ export async function getChannelEpg(
   try {
     xml = await cachedFetchText(bridge, source, "xml", XMLTV_TTL_MS);
   } catch (e) {
-    throw new EpgError("fetch-failed", e instanceof Error ? e.message : "Could not load the EPG.");
+    throw new EpgError("fetch-failed", errorMessage(e, "Could not load the EPG."));
   }
 
   const programmes = extractChannelProgrammes(xml, channelId);

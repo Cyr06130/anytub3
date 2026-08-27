@@ -95,6 +95,46 @@ test.describe("TV mode", () => {
     await expect(page.getByRole("button", { name: /Mux — Test Stream/ })).toBeFocused();
   });
 
+  test("zapping never writes to Bulletin (no per-zap preimage submission)", async ({ page }) => {
+    // Regression: tune() used to republish the library index on every channel
+    // change — one new immutable Bulletin blob per zap, and in a real host one
+    // visible "submit preimage" authorization per zap. Continuity must ride the
+    // now-playing statement + cache only, so the blob count stays flat.
+    await gotoTv(page);
+
+    // Add the sample playlist and tune the first channel.
+    await expect(page.getByRole("button", { name: "Add a playlist" })).toBeFocused();
+    await page.keyboard.press("Enter");
+    await pressUntilFocused(page, "ArrowDown", page.getByRole("button", { name: "Load the sample" }));
+    await page.keyboard.press("Enter");
+    await expect(page.getByText(/Playlist saved/)).toBeVisible();
+    await pressUntilFocused(page, "ArrowDown", page.getByRole("button", { name: "Programme guide" }).first());
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("heading", { name: "Mux — Test Stream" })).toBeVisible();
+
+    // The mock Bulletin stores one localStorage blob per cloudStore() call.
+    const cloudBlobs = () =>
+      page.evaluate(
+        (prefix) => Object.keys(localStorage).filter((k) => k.startsWith(prefix)).length,
+        "anytub3.mock.cloud.",
+      );
+    const beforeZapping = await cloudBlobs();
+    expect(beforeZapping).toBeGreaterThan(0); // save DID persist (playlist + index)
+
+    // Zap across three channels; each banner confirms the tune completed.
+    await page.keyboard.press("ArrowDown");
+    await expect(page.getByRole("heading", { name: "Big Buck Bunny" })).toBeVisible();
+    await page.keyboard.press("ArrowDown");
+    await expect(page.getByRole("heading", { name: "Tears of Steel" })).toBeVisible();
+    await page.keyboard.press("ArrowUp");
+    await expect(page.getByRole("heading", { name: "Big Buck Bunny" })).toBeVisible();
+
+    // Let the async publish path settle, then require a flat blob count.
+    await page.waitForTimeout(500);
+    expect(await cloudBlobs()).toBe(beforeZapping);
+  });
+
   test("webOS Back key: keyCode 461 and key GoBack both pop the screen stack", async ({ page }) => {
     await gotoTv(page);
     await expect(page.getByRole("button", { name: "Add a playlist" })).toBeFocused();

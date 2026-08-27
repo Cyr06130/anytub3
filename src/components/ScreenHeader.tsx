@@ -1,6 +1,6 @@
 import { Button } from "@novasamatech/tr-ui";
 import { ArrowLeft } from "lucide-react";
-import { goBack } from "@/state/store";
+import { goBack } from "@/state/navigation";
 
 type ScreenHeaderProps = {
   title: string;

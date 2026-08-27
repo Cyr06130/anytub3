@@ -15,11 +15,11 @@
   },
   "dependencies": {
     "@novasamatech/tr-ui": "^0.2.11",
-    "@parity/product-sdk-cloud-storage": "^0.6.6",
+    "@parity/product-sdk-cloud-storage": "^0.10.1",
     "@parity/product-sdk-crypto": "^0.1.1",
-    "@parity/product-sdk-host": "^0.11.0",
-    "@parity/product-sdk-keys": "^0.3.12",
-    "@parity/product-sdk-statement-store": "^0.4.10",
+    "@parity/product-sdk-host": "^0.16.0",
+    "@parity/product-sdk-keys": "^0.3.19",
+    "@parity/product-sdk-statement-store": "^0.6.5",
     "hls.js": "^1.6",
     "lucide-react": "^1.21",
     "react": "^19",
@@ -27,7 +27,7 @@
     "react-dom": "^19"
   },
   "devDependencies": {
-    "@parity/host-api-test-sdk": "^0.9.2",
+    "@parity/host-api-test-sdk": "^0.12.1",
     "@playwright/test": "^1.61",
     "@tailwindcss/vite": "^4.3",
     "@types/react": "^19",

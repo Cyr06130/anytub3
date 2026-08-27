@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { Button, Input, Copy } from "@novasamatech/tr-ui";
 import { Copy as CopyIcon, MessageSquareShare } from "lucide-react";
-import { buildShareCode, goBack, shareCurrentPlaylist, useApp } from "@/state/store";
+import { useApp } from "@/state/app-state";
+import { goBack } from "@/state/navigation";
+import { buildShareCode, shareCurrentPlaylist } from "@/state/sharing";
 import { ScreenHeader } from "@/components/ScreenHeader";
 
 type ShareSheetProps = {

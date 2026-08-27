@@ -3,8 +3,9 @@ import { Badge, Button, Skeleton, Input } from "@novasamatech/tr-ui";
 import { CalendarClock, Link as LinkIcon } from "lucide-react";
 import type { Channel, ChannelEpg, Playlist } from "@/types";
 import { getChannelEpg, nowAndNext, progress } from "@/lib/epg";
+import { errorMessage } from "@/lib/errors";
 import { isHttpUrl } from "@/lib/url";
-import { setPlaylistEpgUrl } from "@/state/store";
+import { setPlaylistEpgUrl } from "@/state/playlists";
 
 /** Small per-channel affordance that opens the guide. Lives BESIDE the tune
  *  button (never nested in it) so the EPG click doesn't also change channel. */
@@ -61,8 +62,7 @@ export function EpgView({ playlist, channel }: EpgViewProps) {
       .then((epg) => active && setState({ status: "ready", epg }))
       .catch((e) => {
         if (!active) return;
-        const message = e instanceof Error ? e.message : "Could not load the guide.";
-        setState({ status: "error", message });
+        setState({ status: "error", message: errorMessage(e, "Could not load the guide.") });
       });
     return () => {
       active = false;

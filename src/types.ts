@@ -60,7 +60,8 @@ export type LibraryIndex = {
     /** Original CID, if this entry was imported from a share (de-dupe re-imports). */
     sourceCid?: string;
   }>;
-  lastPlayed?: { playlistCid: string; channelId: string; positionMs?: number };
+  // NB: older stored indexes may carry an extra `lastPlayed` field; it was never
+  // read (resume rides the now-playing statement + cache) and is ignored.
 };
 
 /** Live handoff state — published to the `now-playing` Statement Store channel. */

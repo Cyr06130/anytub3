@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { Card, Empty, Badge, Button } from "@novasamatech/tr-ui";
 import { Tv, Plus, Share2, Pencil, Trash2 } from "lucide-react";
-import { deletePlaylist, navigate, tune, useApp } from "@/state/store";
+import { useApp } from "@/state/app-state";
+import { navigate } from "@/state/navigation";
+import { deletePlaylist, tune } from "@/state/playlists";
 import { ChannelRow } from "@/components/ChannelRow";
 
 export function Library() {

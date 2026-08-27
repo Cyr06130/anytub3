@@ -37,6 +37,14 @@ export function setHttpFixture(url: string, body: string): void {
   HTTP_FIXTURES.set(url, body);
 }
 
+// e2e/demo seam: simulate the statement store rejecting writes (what a real
+// host does on quota/authorization failures), so tests can prove a failed
+// resume-pointer publish is surfaced to the user instead of swallowed.
+let channelWritesFail = false;
+export function setChannelWriteFailure(fail: boolean): void {
+  channelWritesFail = fail;
+}
+
 function getOrCreateSeed(): Uint8Array {
   const existing = localStorage.getItem(SEED_KEY);
   if (existing) return bytesFromBase64(existing);
@@ -89,6 +97,7 @@ class MockChannel implements ChannelLike {
   }
 
   async write(channelName: string, value: ChannelEnvelope): Promise<void> {
+    if (channelWritesFail) throw new Error("Simulated statement rejection (demo seam)");
     const prev = this.read(channelName);
     if (prev && prev.timestamp > value.timestamp) return; // last-write-wins
     this.persist(channelName, value);
@@ -138,10 +147,6 @@ export function createMockBridge(): HostBridge {
       buf.set(seed, 0);
       buf.set(context, seed.length);
       return sha256(buf);
-    },
-
-    async preallocate() {
-      return true; // no allowances needed off-host
     },
 
     async cloudStore(bytes: Uint8Array) {

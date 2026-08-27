@@ -1,7 +1,9 @@
 import { useRef, useState } from "react";
 import { Input, Button } from "@novasamatech/tr-ui";
 import { Link as LinkIcon, Upload, Sparkles, Ticket } from "lucide-react";
-import { addPlaylist, addPlaylistFromUrl, goBack, importShareCode } from "@/state/store";
+import { goBack } from "@/state/navigation";
+import { addPlaylist, addPlaylistFromUrl } from "@/state/playlists";
+import { importShareCode } from "@/state/sharing";
 import { parseM3U, parseM3UHeader, deriveTitle } from "@/lib/m3u";
 import { SAMPLE_M3U } from "@/lib/sample";
 import { isTv } from "@/lib/tv";

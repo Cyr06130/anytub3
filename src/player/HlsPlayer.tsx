@@ -1,6 +1,7 @@
 import Hls from "hls.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Maximize, Minimize } from "lucide-react";
+import { errorMessage } from "@/lib/errors";
 import { pushKeyHandler } from "@/lib/tv-input";
 
 /** Imperative playback surface for the TV overlay's media keys. */
@@ -196,7 +197,7 @@ export function HlsPlayer({
       // Synchronous failure constructing/attaching hls (e.g. blocked worker,
       // unavailable MediaSource): surface it, don't throw into render.
       setLoading(false);
-      onError?.(err instanceof Error ? err.message : "Could not start playback.");
+      onError?.(errorMessage(err, "Could not start playback."));
     }
 
     return () => {

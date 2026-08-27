@@ -1,5 +1,6 @@
 import { aesGcmEncryptPacked, aesGcmDecryptPacked } from "@parity/product-sdk-crypto";
 import { getBridge } from "@/lib/bridge";
+import { utf8 } from "@/lib/bytes";
 import { symKey } from "@/lib/keys";
 import { sanitizeEntries } from "@/lib/m3u";
 import { KEY_CTX } from "@/lib/config";
@@ -7,11 +8,10 @@ import { isHttpUrl } from "@/lib/url";
 import type { LibraryIndex, Playlist, PlaylistBody } from "@/types";
 
 const LIBRARY_INDEX_CTX = "anytub3/library-index/v1";
-const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 function encryptJson(obj: unknown, key: Uint8Array): Uint8Array {
-  return aesGcmEncryptPacked(encoder.encode(JSON.stringify(obj)), key);
+  return aesGcmEncryptPacked(utf8(JSON.stringify(obj)), key);
 }
 function decryptJson<T>(blob: Uint8Array, key: Uint8Array): T {
   return JSON.parse(decoder.decode(aesGcmDecryptPacked(blob, key))) as T;
@@ -91,10 +91,7 @@ export async function loadLibraryIndex(cid: string): Promise<LibraryIndex> {
 }
 
 /** Build a library index from the in-memory playlists (only persisted ones). */
-export function buildLibraryIndex(
-  playlists: Playlist[],
-  lastPlayed?: LibraryIndex["lastPlayed"],
-): LibraryIndex {
+export function buildLibraryIndex(playlists: Playlist[]): LibraryIndex {
   return {
     v: 1,
     playlists: playlists
@@ -107,6 +104,5 @@ export function buildLibraryIndex(
         addedAt: p.addedAt,
         ...(p.sourceCid ? { sourceCid: p.sourceCid } : {}),
       })),
-    lastPlayed,
   };
 }

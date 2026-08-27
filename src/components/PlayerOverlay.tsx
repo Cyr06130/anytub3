@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { Channel, Playlist, Programme } from "@/types";
 import { getChannelEpg, progress } from "@/lib/epg";
-import { goLibrary, navigate, tune } from "@/state/store";
+import { goLibrary, navigate } from "@/state/navigation";
+import { tune } from "@/state/playlists";
 import { pushKeyHandler } from "@/lib/tv-input";
 import { focusEl } from "@/lib/tv-nav";
 import type { HlsPlayerApi } from "@/player/HlsPlayer";
