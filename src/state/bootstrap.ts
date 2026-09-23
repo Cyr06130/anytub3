@@ -1,7 +1,7 @@
 import { toastError, toastInfo } from "@novasamatech/tr-ui";
 import type { LibraryHead, LibraryIndex, NowPlaying, Playlist } from "@/types";
 import { getBridge } from "@/lib/bridge";
-import { loadLibraryIndex, loadOwnPlaylist } from "@/lib/bulletin";
+import { loadLibraryIndex, loadOwnPlaylist, playlistEpgFields } from "@/lib/bulletin";
 import { errorMessage } from "@/lib/errors";
 import { currentUserId } from "@/lib/host";
 import { pickFreshest } from "@/lib/lww";
@@ -155,7 +155,7 @@ async function mergeIndex(index: LibraryIndex): Promise<void> {
           entries: body.entries,
           cid: meta.cid,
           sourceCid: meta.sourceCid,
-          ...(body.epgUrl ? { epgUrl: body.epgUrl } : {}),
+          ...playlistEpgFields(body),
           addedAt: Date.now(),
         };
       }),

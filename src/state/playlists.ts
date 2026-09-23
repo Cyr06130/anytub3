@@ -1,6 +1,8 @@
 import { toastError, toastSuccess } from "@novasamatech/tr-ui";
-import type { Channel, Playlist } from "@/types";
+import type { Channel, EpgBinding, Playlist, PlaylistEpg } from "@/types";
+import { getBridge } from "@/lib/bridge";
 import { buildLibraryIndex, storeLibraryIndex, storePlaylist } from "@/lib/bulletin";
+import { withEpgBinding, withEpgSource } from "@/lib/epg-playlist";
 import { errorMessage } from "@/lib/errors";
 import { deriveTitle, parseM3U, parseM3UHeader } from "@/lib/m3u";
 import { publishLibraryHead, publishNowPlaying, startNpHeartbeat, stopNpHeartbeat } from "@/lib/sync";
@@ -54,11 +56,14 @@ async function saveAndPublish(playlist: Playlist): Promise<string> {
 
 // ── Actions ──────────────────────────────────────────────────────────────────
 
-export async function addPlaylist(
-  title: string,
-  entries: Channel[],
-  opts?: { epgUrl?: string },
-): Promise<void> {
+export type AddPlaylistOptions = {
+  /** XMLTV guide URLs advertised by the m3u header (`url-tvg`). */
+  epgUrls?: string[];
+  /** Where the m3u was fetched from — lets the guide resolver derive provider APIs. */
+  sourceUrl?: string;
+};
+
+export async function addPlaylist(title: string, entries: Channel[], opts: AddPlaylistOptions = {}): Promise<void> {
   if (!entries.length) {
     toastError({ title: "Empty playlist", description: "No valid channel found." });
     return;
@@ -67,7 +72,8 @@ export async function addPlaylist(
     id: crypto.randomUUID(),
     title,
     entries,
-    ...(opts?.epgUrl ? { epgUrl: opts.epgUrl } : {}),
+    ...(isHttpUrl(opts.sourceUrl) ? { sourceUrl: opts.sourceUrl } : {}),
+    ...(opts.epgUrls?.length ? { epg: { sources: opts.epgUrls } } : {}),
     addedAt: Date.now(),
   };
   setState({ playlists: [...getState().playlists, playlist] });
@@ -86,13 +92,12 @@ export async function addPlaylistFromUrl(url: string): Promise<Channel[]> {
   if (!isHttpUrl(trimmed)) {
     throw new Error("Only http(s) playlist URLs are supported.");
   }
-  const res = await fetch(trimmed);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const text = await res.text();
+  // Through the bridge like every other external fetch (host policy, e2e fixtures).
+  const text = await (await getBridge()).httpGet(trimmed);
   const entries = parseM3U(text);
-  // Pick up the provider's EPG guide (url-tvg) advertised in the m3u header.
-  const { epgUrl } = parseM3UHeader(text);
-  await addPlaylist(deriveTitle(url, entries.length), entries, { epgUrl });
+  // Pick up the provider's EPG guide(s) (url-tvg) advertised in the m3u header,
+  // and remember the origin: an Xtream panel URL unlocks its per-channel EPG.
+  await addPlaylist(deriveTitle(url, entries.length), entries, { ...parseM3UHeader(text), sourceUrl: trimmed });
   return entries;
 }
 
@@ -162,21 +167,35 @@ export async function updatePlaylist(
 }
 
 /**
- * Attach (or change) the XMLTV EPG source of a playlist. Bulletin is immutable,
- * so this re-stores the body under a new CID and republishes the library index —
- * the EPG source then persists and syncs across hosts. Quiet (no toast): it's a
+ * Save a playlist's guide configuration. Bulletin is immutable, so this
+ * re-stores the body under a new CID and republishes the library index — the
+ * configuration then persists and syncs across hosts. Quiet (no toast): it's a
  * background refinement triggered from the guide panel.
  */
-export async function setPlaylistEpgUrl(id: string, epgUrl: string): Promise<void> {
+async function savePlaylistEpg(id: string, epg: PlaylistEpg): Promise<void> {
   const pl = findPlaylist(id);
-  if (!pl || !isHttpUrl(epgUrl)) return;
-  const updated: Playlist = { ...pl, epgUrl };
+  if (!pl) return;
+  const updated: Playlist = { ...pl, epg };
   replacePlaylist(updated);
   try {
     await saveAndPublish(updated);
   } catch (e) {
-    console.warn("[AnyTub3] setPlaylistEpgUrl:", e);
+    console.warn("[AnyTub3] savePlaylistEpg:", e);
   }
+}
+
+/** Add an XMLTV guide URL (pasted by the user) as the playlist's first source. */
+export async function addPlaylistEpgSource(id: string, url: string): Promise<void> {
+  const pl = findPlaylist(id);
+  if (!pl || !isHttpUrl(url)) return;
+  await savePlaylistEpg(id, withEpgSource(pl.epg, url));
+}
+
+/** Record the guide channel the user picked for one playlist entry. */
+export async function bindPlaylistEpgChannel(id: string, channelId: string, binding: EpgBinding): Promise<void> {
+  const pl = findPlaylist(id);
+  if (!pl) return;
+  await savePlaylistEpg(id, withEpgBinding(pl.epg, channelId, binding));
 }
 
 export async function deletePlaylist(id: string): Promise<void> {

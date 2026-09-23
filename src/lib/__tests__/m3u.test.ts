@@ -97,22 +97,47 @@ describe("parseM3U", () => {
   });
 });
 
+describe("parseM3U tvg-country", () => {
+  it("keeps a valid tvg-country as an upper-case ISO code and drops junk", () => {
+    const [fr, junk] = parseM3U(
+      m3u(
+        "#EXTM3U",
+        '#EXTINF:-1 tvg-id="TF1.fr" tvg-country="fr",TF1',
+        "https://x.test/tf1.m3u8",
+        '#EXTINF:-1 tvg-id="x" tvg-country="France",X',
+        "https://x.test/x.m3u8",
+      ),
+    );
+    expect(fr.country).toBe("FR");
+    expect(junk.country).toBeUndefined();
+  });
+});
+
 describe("parseM3UHeader", () => {
   it.each(["url-tvg", "x-tvg-url", "tvg-url"])("reads %s", (key) => {
     expect(parseM3UHeader(`#EXTM3U ${key}="https://x.test/guide.xml"`)).toEqual({
-      epgUrl: "https://x.test/guide.xml",
+      epgUrls: ["https://x.test/guide.xml"],
     });
   });
 
-  it("takes the first http(s) URL of a comma-separated list", () => {
+  it("keeps every http(s) URL of a comma-separated list, in order, de-duplicated", () => {
     expect(
-      parseM3UHeader('#EXTM3U url-tvg="ftp://no.test/a, https://x.test/g.xml, https://y.test/h.xml"'),
-    ).toEqual({ epgUrl: "https://x.test/g.xml" });
+      parseM3UHeader(
+        '#EXTM3U url-tvg="ftp://no.test/a, https://x.test/g.xml, https://y.test/h.xml, https://x.test/g.xml"',
+      ),
+    ).toEqual({ epgUrls: ["https://x.test/g.xml", "https://y.test/h.xml"] });
   });
 
-  it("returns nothing for absent or non-http sources", () => {
-    expect(parseM3UHeader("#EXTM3U")).toEqual({});
-    expect(parseM3UHeader('#EXTM3U url-tvg="javascript:alert(1)"')).toEqual({});
+  it("merges the URLs of several header keys", () => {
+    expect(
+      parseM3UHeader('#EXTM3U url-tvg="https://x.test/g.xml" x-tvg-url="https://y.test/h.xml"'),
+    ).toEqual({ epgUrls: ["https://x.test/g.xml", "https://y.test/h.xml"] });
+  });
+
+  it("returns an empty list for absent or non-http sources", () => {
+    expect(parseM3UHeader("#EXTM3U")).toEqual({ epgUrls: [] });
+    expect(parseM3UHeader('#EXTM3U url-tvg="javascript:alert(1)"')).toEqual({ epgUrls: [] });
+    expect(parseM3UHeader("no header at all")).toEqual({ epgUrls: [] });
   });
 });
 

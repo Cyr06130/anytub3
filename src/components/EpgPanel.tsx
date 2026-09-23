@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
-import { Badge, Button, Skeleton, Input } from "@novasamatech/tr-ui";
+import { Badge, Button, Input } from "@novasamatech/tr-ui";
 import { CalendarClock, Link as LinkIcon } from "lucide-react";
 import type { Channel, ChannelEpg, Playlist } from "@/types";
 import { getChannelEpg, nowAndNext, progress } from "@/lib/epg";
+import { guideDirectorySources } from "@/lib/epg-sources";
 import { errorMessage } from "@/lib/errors";
+import { isTv } from "@/lib/tv";
 import { isHttpUrl } from "@/lib/url";
-import { setPlaylistEpgUrl } from "@/state/playlists";
+import { addPlaylistEpgSource, bindPlaylistEpgChannel } from "@/state/playlists";
+import { EpgChannelPicker } from "@/components/EpgChannelPicker";
+import { SkeletonBlock } from "@/components/SkeletonBlock";
 
 /** Small per-channel affordance that opens the guide. Lives BESIDE the tune
  *  button (never nested in it) so the EPG click doesn't also change channel. */
@@ -22,9 +26,14 @@ function fmtTime(ms: number): string {
 }
 
 type LoadState =
-  | { status: "loading" }
+  | { status: "loading"; step?: string }
   | { status: "error"; message: string }
   | { status: "ready"; epg: ChannelEpg };
+
+/** What the panel shows: the guide, the directory picker, or the URL field. */
+type PanelMode = "guide" | "pick" | "paste";
+
+const CAN_PICK = guideDirectorySources().length > 0;
 
 type EpgViewProps = {
   playlist: Playlist;
@@ -33,42 +42,36 @@ type EpgViewProps = {
 
 /**
  * On-demand programme guide for a single channel — embeddable anywhere (the
- * EPG screen, the player sidebar), not a modal. Fetching happens ONLY while
- * mounted — never on render of the channel lists — which is what keeps EPG
- * lazy and the memory footprint small. When the playlist has no EPG source
- * yet, it lets the user paste an XMLTV guide URL (saved to the playlist), so
- * the guide is reachable for any playlist, not just those whose m3u advertised
- * a `url-tvg`.
+ * EPG screen, the player sidebar), not a modal. Opening it runs the guide
+ * resolver (provider API → playlist guides → public directory) and shows which
+ * step is running; fetching happens ONLY while mounted, never on render of the
+ * channel lists, which is what keeps EPG lazy. When nothing matches, the user
+ * can pick the channel in the public directory or paste an XMLTV URL — both
+ * are saved to the playlist.
  */
 export function EpgView({ playlist, channel }: EpgViewProps) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [now, setNow] = useState(() => Date.now());
-  // A source pasted in this session (overrides playlist.epgUrl until persisted).
-  const [override, setOverride] = useState<string | null>(null);
-  const [draftUrl, setDraftUrl] = useState("");
+  const [mode, setMode] = useState<PanelMode>("guide");
 
-  // Reset the per-target inputs whenever the target changes.
-  useEffect(() => {
-    setOverride(null);
-    setDraftUrl("");
-  }, [playlist.id, channel.id]);
+  useEffect(() => setMode("guide"), [playlist.id, channel.id]);
 
-  // Load the guide on mount, when the target changes, or when a source is set.
+  // Resolve on mount, when the target changes, or when the playlist's guide
+  // configuration changes (a pasted URL, a picked channel).
   useEffect(() => {
     let active = true;
     setState({ status: "loading" });
     setNow(Date.now());
-    void getChannelEpg(playlist, channel, { sourceOverride: override ?? undefined })
+    void getChannelEpg(playlist, channel, {
+      onStep: (step) => active && setState({ status: "loading", step: step.label }),
+    })
       .then((epg) => active && setState({ status: "ready", epg }))
-      .catch((e) => {
-        if (!active) return;
-        setState({ status: "error", message: errorMessage(e, "Could not load the guide.") });
-      });
+      .catch((e) => active && setState({ status: "error", message: errorMessage(e, "Could not load the guide.") }));
     return () => {
       active = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playlist.id, playlist.epgUrl, channel.id, override]);
+  }, [playlist.id, playlist.epg, playlist.sourceUrl, channel.id]);
 
   // Keep "now"/progress live while the guide stays open (no refetch).
   useEffect(() => {
@@ -76,65 +79,140 @@ export function EpgView({ playlist, channel }: EpgViewProps) {
     return () => clearInterval(id);
   }, []);
 
-  function applyUrl() {
-    const url = draftUrl.trim();
-    if (!isHttpUrl(url)) return;
-    setOverride(url); // drives an immediate reload via the effect above
-    void setPlaylistEpgUrl(playlist.id, url); // persist for next time + sync
+  if (mode === "pick") {
+    return (
+      <EpgChannelPicker
+        channel={channel}
+        onPick={(binding) => {
+          void bindPlaylistEpgChannel(playlist.id, channel.id, binding);
+          setMode("guide");
+        }}
+        onCancel={() => setMode("guide")}
+      />
+    );
   }
 
-  const categories =
-    state.status === "ready" ? state.epg.meta?.categories?.join(" · ") : undefined;
+  if (mode === "paste") {
+    return (
+      <PasteGuideUrl
+        onApply={(url) => {
+          void addPlaylistEpgSource(playlist.id, url);
+          setMode("guide");
+        }}
+        onCancel={() => setMode("guide")}
+      />
+    );
+  }
 
   return (
     <div className="flex flex-col gap-3">
-      {categories && <p className="text-fg-secondary text-sm">{categories}</p>}
-
       {state.status === "loading" && (
         <div className="flex flex-col gap-3">
           <SkeletonBlock className="h-20 w-full" />
           <SkeletonBlock className="h-9 w-2/3" />
           <SkeletonBlock className="h-9 w-1/2" />
-        </div>
-      )}
-
-      {state.status === "error" && (
-        <div className="flex flex-col gap-3 py-2">
-          <p className="text-fg-secondary text-center text-sm">{state.message}</p>
-          <div className="flex items-center gap-2">
-            <div className="min-w-0 flex-1">
-              <Input
-                leftIcon={<LinkIcon />}
-                placeholder="https://…/guide.xml (XMLTV)"
-                value={draftUrl}
-                onChange={(e) => setDraftUrl(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && draftUrl.trim() && applyUrl()}
-              />
-            </div>
-            <Button variant="secondary" disabled={!draftUrl.trim()} onClick={applyUrl}>
-              Load
-            </Button>
-          </div>
-          <p className="text-fg-secondary text-center text-xs">
-            Paste an XMLTV guide URL — e.g. your provider's EPG (the <code>url-tvg</code> from
-            its m3u). It's saved to this playlist.
+          <p className="text-fg-tertiary text-center text-xs" aria-live="polite">
+            {state.step ? `Checking ${state.step}…` : "Looking for a guide…"}
           </p>
         </div>
       )}
 
-      {state.status === "ready" && <Guide epg={state.epg} now={now} />}
+      {state.status === "error" && (
+        <NoGuide message={state.message} onPick={() => setMode("pick")} onPaste={() => setMode("paste")} />
+      )}
+
+      {state.status === "ready" && (
+        <>
+          <Guide epg={state.epg} now={now} />
+          <Provenance epg={state.epg} channel={channel} onChange={() => setMode("pick")} />
+        </>
+      )}
     </div>
   );
 }
 
-/** Sized skeleton — tr-ui's Skeleton can't be sized directly (no className). */
-function SkeletonBlock({ className }: { className: string }) {
+// ── remedies ─────────────────────────────────────────────────────────────────
+
+type NoGuideProps = { message: string; onPick: () => void; onPaste: () => void };
+
+/** The resolver found nothing: offer the directory picker (any platform) and
+ *  the URL field (pointer platforms — there's no keyboard on a TV). */
+function NoGuide({ message, onPick, onPaste }: NoGuideProps) {
   return (
-    <div className={className}>
-      <Skeleton style={{ height: "100%", width: "100%" }} />
+    <div className="flex flex-col gap-3 py-2">
+      <p className="text-fg-secondary text-center text-sm">{message}</p>
+      <div className="flex flex-wrap justify-center gap-2">
+        {CAN_PICK && (
+          <Button variant="secondary" onClick={onPick}>
+            Choose the channel
+          </Button>
+        )}
+        {!isTv && (
+          <Button variant="ghost" onClick={onPaste}>
+            Paste a guide URL
+          </Button>
+        )}
+      </div>
     </div>
   );
 }
+
+type PasteGuideUrlProps = { onApply: (url: string) => void; onCancel: () => void };
+
+function PasteGuideUrl({ onApply, onCancel }: PasteGuideUrlProps) {
+  const [draft, setDraft] = useState("");
+  const url = draft.trim();
+  const valid = isHttpUrl(url);
+  return (
+    <div className="flex flex-col gap-3 py-2">
+      <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <Input
+            leftIcon={<LinkIcon />}
+            placeholder="https://…/guide.xml (XMLTV)"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && valid && onApply(url)}
+          />
+        </div>
+        <Button variant="secondary" disabled={!valid} onClick={() => onApply(url)}>
+          Load
+        </Button>
+      </div>
+      <p className="text-fg-secondary text-center text-xs">
+        Paste an XMLTV guide URL — e.g. your provider's EPG (the <code>url-tvg</code> from its m3u). It's saved to
+        this playlist.
+      </p>
+      <div className="flex justify-end">
+        <Button variant="ghost" size="sm" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+type ProvenanceProps = { epg: ChannelEpg; channel: Channel; onChange: () => void };
+
+/** Where the programmes came from, and the way to correct a wrong match. */
+function Provenance({ epg, channel, onChange }: ProvenanceProps) {
+  const alias = epg.sourceChannelName && epg.sourceChannelName !== channel.name ? `${epg.sourceChannelName} · ` : "";
+  return (
+    <div className="flex items-center justify-between gap-2 px-1">
+      <span className="text-fg-tertiary min-w-0 truncate text-xs">
+        Guide: {alias}
+        {epg.sourceLabel}
+      </span>
+      {CAN_PICK && (
+        <Button variant="ghost" size="sm" onClick={onChange}>
+          Wrong channel?
+        </Button>
+      )}
+    </div>
+  );
+}
+
+// ── the guide itself ─────────────────────────────────────────────────────────
 
 function ProgressBar({ value }: { value: number }) {
   const pct = Math.round(value * 100);

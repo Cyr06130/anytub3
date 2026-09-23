@@ -27,3 +27,14 @@ describe("codec round-trip", () => {
     await expect(decompressText(corrupt)).rejects.toThrow();
   });
 });
+
+describe("gzip files", () => {
+  it("detects and inflates a gzip payload", async () => {
+    const { gunzipBytes, isGzip } = await import("@/lib/codec");
+    const raw = new TextEncoder().encode("<tv>guide</tv>");
+    const gz = new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer());
+    expect(isGzip(gz)).toBe(true);
+    expect(isGzip(raw)).toBe(false);
+    expect(new TextDecoder().decode(await gunzipBytes(gz))).toBe("<tv>guide</tv>");
+  });
+});

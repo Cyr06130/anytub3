@@ -1,7 +1,7 @@
 import { sha256 } from "@parity/product-sdk-crypto";
 import type { ChannelEnvelope, ChannelLike, HostBridge } from "./types";
-import { isHttpUrl } from "@/lib/url";
-import { base64FromBytes, bytesFromBase64 } from "@/lib/bytes";
+import { cutAt, fetchBytes, fetchText, fetchTextPrefix } from "./http";
+import { base64FromBytes, bytesFromBase64, utf8 } from "@/lib/bytes";
 
 // ── Standalone / dev bridge ──────────────────────────────────────────────────
 // Emulates the host out of a container (design: "dev off-host → degraded mode").
@@ -164,15 +164,18 @@ export function createMockBridge(): HostBridge {
       return bytesFromBase64(raw);
     },
 
+    // No fixture → behave like the real bridge (lets the demo fetch a real
+    // provider's guide when CORS permits).
     async httpGet(url: string) {
+      return HTTP_FIXTURES.get(url) ?? fetchText(url);
+    },
+    async httpGetBytes(url: string) {
       const fixture = HTTP_FIXTURES.get(url);
-      if (fixture !== undefined) return fixture;
-      // No fixture → behave like the real bridge (lets the demo fetch a real
-      // provider's guide when CORS permits).
-      if (!isHttpUrl(url)) throw new Error("Only http(s) URLs are supported.");
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.text();
+      return fixture !== undefined ? utf8(fixture) : fetchBytes(url);
+    },
+    async httpGetPrefix(url: string, opts) {
+      const fixture = HTTP_FIXTURES.get(url);
+      return fixture !== undefined ? cutAt(fixture, opts.until) : fetchTextPrefix(url, opts);
     },
 
     channel(topic2: string) {

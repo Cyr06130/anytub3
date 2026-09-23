@@ -52,8 +52,7 @@ export function AddPlaylist() {
     try {
       const text = await file.text();
       const entries = parseM3U(text);
-      const { epgUrl } = parseM3UHeader(text);
-      await addPlaylist(deriveTitle(file.name, entries.length), entries, { epgUrl });
+      await addPlaylist(deriveTitle(file.name, entries.length), entries, parseM3UHeader(text));
       goBack();
     } finally {
       setBusy(false);

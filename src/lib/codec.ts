@@ -58,3 +58,15 @@ export async function decompressText(blob: string): Promise<string> {
   const raw = tag === CODEC_GZIP ? await gunzip(payload) : payload;
   return new TextDecoder().decode(raw);
 }
+
+// ── gzip files (downloaded `.xml.gz` guides) ─────────────────────────────────
+
+export function isGzip(bytes: Uint8Array): boolean {
+  return bytes.length > 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
+}
+
+/** Inflate a gzip file. Throws when the runtime has no DecompressionStream. */
+export async function gunzipBytes(bytes: Uint8Array): Promise<Uint8Array> {
+  if (!hasCompressionStream()) throw new Error("Compressed guides are not supported on this device.");
+  return gunzip(bytes);
+}
