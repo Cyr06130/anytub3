@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Moon, RotateCcw, Sun } from "lucide-react";
-import anytubIcon from "@/assets/anytub3.svg";
+import anytubIcon from "@/assets/anytub3.webp";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -212,7 +212,7 @@ export function App() {
     <div className="app-shell mx-auto flex min-h-dvh w-full max-w-3xl flex-col gap-6 px-4 py-6 sm:px-6 sm:py-8">
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <header className="flex items-center gap-3">
-          <img src={anytubIcon} alt="" className="rounded-nested size-9" />
+          <img src={anytubIcon} alt="" width={36} height={36} className="size-9" />
           <div className="flex min-w-0 flex-col">
             <h1 className="text-heading-s text-fg-primary">AnyTub3</h1>
             <p className="text-caption text-fg-tertiary">Decentralized IPTV</p>
