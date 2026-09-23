@@ -232,6 +232,9 @@ usage (see `config.ts → KEY_CTX`).
   archive in memory), which can be cold or restarting minutes after boot; a failed `import()`
   then 404s on the host's nginx. The player is fetched right after boot and a failure shows Retry
   instead of a screen crash.
+  For the same reason the entry stylesheet is **inlined into `index.html`** at build time
+  (`inlineEntryCss` in `vite.config.ts`): a `<link>` that lost the race against the service
+  worker came back as the host's HTML 404 page and left the first paint unstyled.
 - **Statement Store budgets**: `now-playing` (~150-250 B) + `library-head` (~120 B) stay
   under `MAX_USER_TOTAL` (1024 B) and each statement < 512 B.
 - Encryption: packed AES-GCM (`lib/aes.ts`) for contents and states. A share code carries the
