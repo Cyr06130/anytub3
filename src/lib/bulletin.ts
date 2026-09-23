@@ -1,4 +1,4 @@
-import { aesGcmEncryptPacked, aesGcmDecryptPacked } from "@parity/product-sdk-crypto";
+import { aesGcmEncryptPacked, aesGcmDecryptPacked } from "@/lib/aes";
 import { getBridge } from "@/lib/bridge";
 import { utf8 } from "@/lib/bytes";
 import { symKey } from "@/lib/keys";

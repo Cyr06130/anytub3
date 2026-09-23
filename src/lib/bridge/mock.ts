@@ -1,4 +1,4 @@
-import { sha256 } from "@parity/product-sdk-crypto";
+import { sha256 } from "@noble/hashes/sha2.js";
 import type { ChannelEnvelope, ChannelLike, HostBridge } from "./types";
 import { isHttpUrl } from "@/lib/url";
 import { base64FromBytes, bytesFromBase64 } from "@/lib/bytes";

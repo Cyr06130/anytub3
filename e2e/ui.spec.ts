@@ -16,7 +16,7 @@ test.describe("theme toggle", () => {
     const light = await bodyBg(page);
 
     await page.getByRole("button", { name: "Switch to dark mode" }).click();
-    await expect(page.locator("html")).toHaveClass(/dark/);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "berlin-night");
     const dark = await bodyBg(page);
 
     // The body background must actually change (the reported bug: it stayed white).
@@ -25,7 +25,7 @@ test.describe("theme toggle", () => {
     expect(dark).not.toBe("rgb(255, 255, 255)");
 
     await page.getByRole("button", { name: "Switch to light mode" }).click();
-    await expect(page.locator("html")).not.toHaveClass(/dark/);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "berlin-day");
     expect(await bodyBg(page)).toBe(light);
   });
 });
@@ -89,15 +89,20 @@ test.describe("edit + delete playlist", () => {
     await expect(page.getByText("3 channels")).toBeVisible();
   });
 
-  test("delete a playlist returns to the empty state", async ({ page }) => {
+  test("delete acts immediately and Undo restores the playlist", async ({ page }) => {
     await page.goto("/");
     await loadSample(page);
 
+    // One click — no confirmation dialog. The action happens immediately…
     await page.getByRole("button", { name: "Delete playlist" }).first().click();
-    // Confirm inline (no modal — TV friendly).
-    await page.getByRole("button", { name: "Delete", exact: true }).click();
-
     await expect(page.getByText("No playlists")).toBeVisible();
+    // …and the toast offers a grace-period Undo.
     await expect(page.getByText(/Playlist deleted/)).toBeVisible();
+    await page.getByRole("button", { name: "Undo" }).click();
+    await expect(page.getByRole("heading", { name: "AnyTub3 Demo" })).toBeVisible();
+
+    // Deleting again (without Undo) leaves the empty state.
+    await page.getByRole("button", { name: "Delete playlist" }).first().click();
+    await expect(page.getByText("No playlists")).toBeVisible();
   });
 });

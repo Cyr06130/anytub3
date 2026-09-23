@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
-import { Input, Button } from "@novasamatech/tr-ui";
-import { Link as LinkIcon, Upload, Sparkles, Ticket } from "lucide-react";
+import { Sparkles, Upload } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { goBack } from "@/state/navigation";
 import { addPlaylist, addPlaylistFromUrl } from "@/state/playlists";
 import { importShareCode } from "@/state/sharing";
@@ -71,7 +72,7 @@ export function AddPlaylist() {
   }
 
   return (
-    <section className="flex flex-col gap-4">
+    <section className="flex flex-col gap-5">
       <ScreenHeader
         title="Add a playlist"
         description="URL of an .m3u file (http/https) or local import."
@@ -79,10 +80,9 @@ export function AddPlaylist() {
 
       <div className="flex flex-col gap-3">
         <Input
-          leftIcon={<LinkIcon />}
           placeholder="https://…/playlist.m3u"
           value={url}
-          invalid={invalid}
+          aria-invalid={invalid || undefined}
           disabled={busy}
           onChange={(e) => {
             setUrl(e.target.value);
@@ -91,11 +91,15 @@ export function AddPlaylist() {
           onKeyDown={(e) => e.key === "Enter" && void loadUrl()}
         />
         {invalid && (
-          <p className="text-fg-status-error text-center text-sm">
+          <p className="text-body-s text-fg-error text-center">
             Invalid or unreachable URL (CORS?). Check the link or import a file.
           </p>
         )}
-        <Button onClick={() => void loadUrl()} disabled={busy || !url} fullWidth>
+        <Button
+          className="w-full hover:bg-action-primary-hover"
+          onClick={() => void loadUrl()}
+          disabled={busy || !url}
+        >
           {busy ? "Loading…" : "Load"}
         </Button>
 
@@ -103,8 +107,13 @@ export function AddPlaylist() {
           {/* No file system on a TV — the picker is a pointer-platform affordance. */}
           {!isTv && (
             <>
-              <Button variant="secondary" disabled={busy} onClick={() => fileRef.current?.click()}>
-                <Upload /> Import an .m3u
+              <Button
+                variant="secondary"
+                className="hover:bg-action-secondary-hover"
+                disabled={busy}
+                onClick={() => fileRef.current?.click()}
+              >
+                <Upload aria-hidden /> Import an .m3u
               </Button>
               <input
                 ref={fileRef}
@@ -119,26 +128,34 @@ export function AddPlaylist() {
               />
             </>
           )}
-          <Button variant="ghost" disabled={busy} onClick={() => void loadSample()}>
-            <Sparkles /> Load the sample
+          <Button
+            variant="ghost"
+            className="font-normal hover:bg-action-tertiary-hover"
+            disabled={busy}
+            onClick={() => void loadSample()}
+          >
+            <Sparkles aria-hidden /> Load the sample
           </Button>
         </div>
 
         {/* Import a playlist shared with you, by pasting its share code. */}
-        <div className="border-border-secondary flex flex-col gap-2 border-t pt-3">
-          <p className="text-fg-secondary text-center text-sm">Received a share code?</p>
+        <div className="mt-4 flex flex-col gap-2">
+          <p className="text-label-m text-fg-secondary text-center">Received a share code?</p>
           <div className="flex items-center gap-2">
-            <div className="min-w-0 flex-1">
-              <Input
-                leftIcon={<Ticket />}
-                placeholder="anytub3:…"
-                value={code}
-                disabled={busy}
-                onChange={(e) => setCode(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && code.trim() && void importCode()}
-              />
-            </div>
-            <Button variant="secondary" disabled={busy || !code.trim()} onClick={() => void importCode()}>
+            <Input
+              className="min-w-0 flex-1 font-mono"
+              placeholder="anytub3:…"
+              value={code}
+              disabled={busy}
+              onChange={(e) => setCode(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && code.trim() && void importCode()}
+            />
+            <Button
+              variant="secondary"
+              className="hover:bg-action-secondary-hover"
+              disabled={busy || !code.trim()}
+              onClick={() => void importCode()}
+            >
               Import
             </Button>
           </div>

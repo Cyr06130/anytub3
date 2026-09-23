@@ -47,9 +47,9 @@ async function rename(page: Page, to: string) {
 }
 
 async function remove(page: Page) {
+  // Deletion is immediate (design system: act first, offer Undo in a toast).
   await page.getByRole("button", { name: "Delete playlist" }).click();
-  await expect(page.getByText("Delete playlist?")).toBeVisible();
-  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(page.getByText(/Playlist deleted/)).toBeVisible();
 }
 
 const H = (page: Page, name: string) => page.getByRole("heading", { name });

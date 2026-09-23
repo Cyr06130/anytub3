@@ -14,6 +14,25 @@ function fmtTime(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+/** Eyebrow label over the media scrim ("Now" / "Next"). */
+function Eyebrow({ children }: { children: string }) {
+  return <span className="text-overline shrink-0 text-white/70">{children}</span>;
+}
+
+/** Quiet action over the media scrim — the white-tinted surfaces are the
+ *  overlay's own idiom (semantic surfaces don't apply on top of video). */
+function OverlayButton({ onClick, children }: { onClick: () => void; children: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="text-label-m rounded-medium cursor-pointer bg-white/15 px-4 py-2 transition-colors hover:bg-white/25"
+    >
+      {children}
+    </button>
+  );
+}
+
 /**
  * hidden — pure video; Up/Down zap, OK/Left/Right open, Back → library.
  * flash  — channel-identity banner after a tune/zap; Up/Down KEEP zapping
@@ -165,24 +184,24 @@ export function PlayerOverlay({ playlist, channel, api }: PlayerOverlayProps) {
   return (
     <div
       ref={rootRef}
-      className={`absolute inset-0 z-10 flex items-stretch justify-between gap-8 text-white ${
+      className={`text-fg-static-white absolute inset-0 z-10 flex items-stretch justify-between gap-8 ${
         mode === "open" ? "bg-black/55" : "bg-gradient-to-t from-black/80 via-black/25 to-transparent"
       }`}
       style={{ padding: "3.5vh 3.5vw" }}
     >
       <div className="flex min-w-0 flex-1 flex-col justify-end gap-4">
         <div className="flex items-center gap-3">
-          <h2 className="min-w-0 truncate text-2xl font-semibold">{channel.name}</h2>
-          <span className="shrink-0 rounded-full bg-white/25 px-3 py-1 text-sm font-medium">Live</span>
-          {channel.group && <span className="shrink-0 text-sm text-white/70">· {channel.group}</span>}
+          <h2 className="text-heading-l min-w-0 truncate">{channel.name}</h2>
+          <span className="text-label-s shrink-0 rounded-full bg-white/25 px-3 py-1">Live</span>
+          {channel.group && <span className="text-body-s shrink-0 text-white/70">· {channel.group}</span>}
         </div>
 
         {now && (
           <div className="flex max-w-xl flex-col gap-2">
             <div className="flex items-baseline gap-3">
-              <span className="shrink-0 text-sm font-semibold uppercase tracking-wide text-white/70">Now</span>
-              <span className="min-w-0 truncate">{now.title}</span>
-              <span className="shrink-0 text-sm tabular-nums text-white/70">
+              <Eyebrow>Now</Eyebrow>
+              <span className="text-body-l min-w-0 truncate">{now.title}</span>
+              <span className="text-body-s shrink-0 font-mono text-white/70">
                 {fmtTime(now.start)}–{fmtTime(now.stop)}
               </span>
             </div>
@@ -194,9 +213,9 @@ export function PlayerOverlay({ playlist, channel, api }: PlayerOverlayProps) {
             </div>
             {next && (
               <div className="flex items-baseline gap-3">
-                <span className="shrink-0 text-sm font-semibold uppercase tracking-wide text-white/70">Next</span>
-                <span className="min-w-0 truncate text-white/90">{next.title}</span>
-                <span className="shrink-0 text-sm tabular-nums text-white/70">{fmtTime(next.start)}</span>
+                <Eyebrow>Next</Eyebrow>
+                <span className="text-body-m min-w-0 truncate text-white/90">{next.title}</span>
+                <span className="text-body-s shrink-0 font-mono text-white/70">{fmtTime(next.start)}</span>
               </div>
             )}
           </div>
@@ -204,28 +223,18 @@ export function PlayerOverlay({ playlist, channel, api }: PlayerOverlayProps) {
 
         {mode === "open" && (
           <div className="flex gap-3">
-            <button
-              type="button"
-              className="rounded-[8px] bg-white/15 px-4 py-2 hover:bg-white/25"
-              onClick={() => navigate({ name: "epg", playlistId: playlist.id, channelId: channel.id })}
-            >
+            <OverlayButton onClick={() => navigate({ name: "epg", playlistId: playlist.id, channelId: channel.id })}>
               Guide
-            </button>
-            <button
-              type="button"
-              className="rounded-[8px] bg-white/15 px-4 py-2 hover:bg-white/25"
-              onClick={() => goLibrary()}
-            >
-              Library
-            </button>
+            </OverlayButton>
+            <OverlayButton onClick={() => goLibrary()}>Library</OverlayButton>
           </div>
         )}
       </div>
 
       {/* Channel rail (full overlay only): OK tunes, stays open while zapping. */}
       {mode === "open" && (
-        <div className="flex w-80 shrink-0 flex-col overflow-hidden rounded-[12px] bg-black/60">
-          <h3 className="truncate px-4 py-3 text-sm font-medium text-white/70">{playlist.title}</h3>
+        <div className="rounded-container flex w-80 shrink-0 flex-col overflow-hidden bg-black/60">
+          <h3 className="text-label-m truncate px-4 py-3 text-white/70">{playlist.title}</h3>
           <div className="min-h-0 flex-1 overflow-y-auto">
             {playlist.entries.map((ch) => {
               const active = ch.id === channel.id;
@@ -236,8 +245,8 @@ export function PlayerOverlay({ playlist, channel, api }: PlayerOverlayProps) {
                   data-focus-key={ch.id}
                   aria-current={active}
                   onClick={() => void tune(playlist.id, ch)}
-                  className={`block w-full truncate px-4 py-2.5 text-left ${
-                    active ? "bg-white/25 font-medium" : "hover:bg-white/10"
+                  className={`text-body-m block w-full cursor-pointer truncate px-4 py-2.5 text-left transition-colors ${
+                    active ? "bg-white/25" : "hover:bg-white/10"
                   }`}
                 >
                   {ch.name}

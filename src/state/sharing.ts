@@ -1,4 +1,4 @@
-import { toastError, toastInfo, toastSuccess } from "@novasamatech/tr-ui";
+import { toastError, toastInfo, toastSuccess } from "@/lib/toast";
 import type { Playlist, SharePointer } from "@/types";
 import { loadPlaylist, storePlaylist } from "@/lib/bulletin";
 import { KEY_CTX } from "@/lib/config";

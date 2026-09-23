@@ -11,25 +11,32 @@
     "typecheck": "tsc -b --noEmit",
     "lint": "tsc -b --noEmit",
     "test:unit": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "dotns:inspect": "node scripts/dotns-inspect.mjs"
   },
   "dependencies": {
-    "@novasamatech/tr-ui": "^0.2.11",
-    "@parity/product-sdk-cloud-storage": "^0.10.1",
-    "@parity/product-sdk-crypto": "^0.1.1",
-    "@parity/product-sdk-host": "^0.16.0",
-    "@parity/product-sdk-keys": "^0.3.19",
-    "@parity/product-sdk-statement-store": "^0.6.5",
+    "@noble/ciphers": "^2.3.0",
+    "@noble/hashes": "^2.3.0",
+    "@parity/product-sdk-cloud-storage": "^0.12.1",
+    "@parity/product-sdk-host": "^0.21.0",
+    "@parity/product-sdk-statement-store": "^0.6.11",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
     "hls.js": "^1.6",
     "lucide-react": "^1.21",
+    "next-themes": "^0.4.6",
+    "radix-ui": "^1.6.7",
     "react": "^19",
-    "react-compiler-runtime": "^1.0.0",
-    "react-dom": "^19"
+    "react-dom": "^19",
+    "sonner": "^2.0.8",
+    "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
-    "@parity/host-api-test-sdk": "^0.12.1",
+    "@parity/product-sdk-crypto": "^0.1.1",
+    "@parity/product-sdk-keys": "^0.3.26",
     "@playwright/test": "^1.61",
     "@tailwindcss/vite": "^4.3",
+    "@types/node": "^26.4.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^5.2",
@@ -38,5 +45,8 @@
     "typescript": "^5.7",
     "vite": "^7",
     "vitest": "^4.1.10"
+  },
+  "overrides": {
+    "@parity/truapi": "0.19.0"
   }
 }

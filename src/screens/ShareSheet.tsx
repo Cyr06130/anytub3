@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
-import { Button, Input, Copy } from "@novasamatech/tr-ui";
 import { Copy as CopyIcon, MessageSquareShare } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { toastError, toastSuccess } from "@/lib/toast";
 import { useApp } from "@/state/app-state";
 import { goBack } from "@/state/navigation";
 import { buildShareCode, shareCurrentPlaylist } from "@/state/sharing";
@@ -26,11 +28,20 @@ export function ShareSheet({ playlistId }: ShareSheetProps) {
     };
   }, [playlistId]);
 
+  async function copyCode() {
+    try {
+      await navigator.clipboard.writeText(code);
+      toastSuccess({ title: "Share code copied" });
+    } catch {
+      toastError({ title: "Could not copy", description: "Select the code and copy it manually." });
+    }
+  }
+
   if (!playlist) {
     return (
       <section className="flex flex-col gap-4">
         <ScreenHeader title="Share playlist" />
-        <p className="text-fg-secondary">Playlist not found.</p>
+        <p className="text-body-m text-fg-secondary">Playlist not found.</p>
       </section>
     );
   }
@@ -42,28 +53,48 @@ export function ShareSheet({ playlistId }: ShareSheetProps) {
         description="A pointer is shared, never the playlist itself. Anyone holding the code can open it — send it through a channel you trust."
       />
 
+      {/* The code is a machine handle, shown because sharing IS the explicit
+          demand for it — rendered mono, per the identifier rules. */}
       <div className="flex items-center gap-2">
-        <div className="min-w-0 flex-1">
-          <Input value={code} placeholder="Generating…" readOnly aria-label="Share code" />
-        </div>
-        <Copy value={code}>
-          <Button variant="secondary" size="icon" aria-label="Copy share code" disabled={!code}>
-            <CopyIcon />
-          </Button>
-        </Copy>
+        <Input
+          className="min-w-0 flex-1 font-mono"
+          value={code}
+          placeholder="Generating…"
+          readOnly
+          aria-label="Share code"
+        />
+        <Button
+          variant="secondary"
+          size="icon"
+          className="hover:bg-action-secondary-hover"
+          aria-label="Copy share code"
+          disabled={!code}
+          onClick={() => void copyCode()}
+        >
+          <CopyIcon />
+        </Button>
       </div>
 
-      <div className="flex flex-wrap justify-center gap-2">
+      {/* Bottom action slot: the pill commitment + its quiet alternative. */}
+      <div className="mx-auto flex w-full max-w-sm flex-col gap-2">
+        <Button
+          size="lg"
+          className="text-label-l w-full rounded-full px-6 py-3.5 font-semibold hover:bg-action-primary-hover"
+          onClick={() => goBack()}
+        >
+          Done
+        </Button>
         {inHost && (
           <Button
             variant="ghost"
+            size="lg"
+            className="w-full rounded-full font-normal hover:bg-action-tertiary-hover"
             disabled={!code}
             onClick={() => void shareCurrentPlaylist(playlistId)}
           >
-            <MessageSquareShare /> Send to chat
+            <MessageSquareShare aria-hidden /> Send to chat
           </Button>
         )}
-        <Button onClick={() => goBack()}>Done</Button>
       </div>
     </section>
   );

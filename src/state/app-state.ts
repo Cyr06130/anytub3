@@ -11,6 +11,10 @@ export type Screen =
   | { name: "share"; playlistId: string }
   | { name: "epg"; playlistId: string; channelId: string };
 
+/** Why the Polkadot host bridge could not be established (in-host only). The
+ *  UI blocks on it with Retry — never a silent demo fallback. */
+export type HostFailure = { message: string; hint?: string; details?: string };
+
 export type AppState = {
   ready: boolean;
   inHost: boolean;
@@ -23,6 +27,7 @@ export type AppState = {
   /** Timestamp of the now-playing state we currently hold (for LWW handoff). */
   nowPlayingTs: number;
   error: string | null;
+  hostError: HostFailure | null;
 };
 
 const initial: AppState = {
@@ -35,6 +40,7 @@ const initial: AppState = {
   nowPlayingChannelId: null,
   nowPlayingTs: 0,
   error: null,
+  hostError: null,
 };
 
 // ── Container ────────────────────────────────────────────────────────────────

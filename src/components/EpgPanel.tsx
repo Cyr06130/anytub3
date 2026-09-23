@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
-import { Badge, Button, Skeleton, Input } from "@novasamatech/tr-ui";
-import { CalendarClock, Link as LinkIcon } from "lucide-react";
-import type { Channel, ChannelEpg, Playlist } from "@/types";
+import { CalendarClock } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import type { Channel, ChannelEpg, Playlist, Programme } from "@/types";
 import { getChannelEpg, nowAndNext, progress } from "@/lib/epg";
 import { errorMessage } from "@/lib/errors";
 import { isHttpUrl } from "@/lib/url";
@@ -11,7 +14,13 @@ import { setPlaylistEpgUrl } from "@/state/playlists";
  *  button (never nested in it) so the EPG click doesn't also change channel. */
 export function EpgButton({ onClick }: { onClick: () => void }) {
   return (
-    <Button size="icon-sm" variant="ghost" aria-label="Programme guide" onClick={onClick}>
+    <Button
+      size="icon-sm"
+      variant="ghost"
+      className="hover:bg-action-tertiary-hover"
+      aria-label="Programme guide"
+      onClick={onClick}
+    >
       <CalendarClock />
     </Button>
   );
@@ -19,6 +28,16 @@ export function EpgButton({ onClick }: { onClick: () => void }) {
 
 function fmtTime(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/** Time span rendered in Martian Mono so the digits line up down a schedule. */
+function TimeRange({ start, stop }: { start: number; stop?: number }) {
+  return (
+    <span className="text-body-s text-fg-tertiary shrink-0 font-mono">
+      {fmtTime(start)}
+      {stop !== undefined && `–${fmtTime(stop)}`}
+    </span>
+  );
 }
 
 type LoadState =
@@ -88,36 +107,39 @@ export function EpgView({ playlist, channel }: EpgViewProps) {
 
   return (
     <div className="flex flex-col gap-3">
-      {categories && <p className="text-fg-secondary text-sm">{categories}</p>}
+      {categories && <p className="text-body-s text-fg-tertiary">{categories}</p>}
 
       {state.status === "loading" && (
         <div className="flex flex-col gap-3">
-          <SkeletonBlock className="h-20 w-full" />
-          <SkeletonBlock className="h-9 w-2/3" />
-          <SkeletonBlock className="h-9 w-1/2" />
+          <Skeleton className="rounded-container h-24 w-full" />
+          <Skeleton className="rounded-nested h-9 w-2/3" />
+          <Skeleton className="rounded-nested h-9 w-1/2" />
         </div>
       )}
 
       {state.status === "error" && (
         <div className="flex flex-col gap-3 py-2">
-          <p className="text-fg-secondary text-center text-sm">{state.message}</p>
+          <p className="text-body-s text-fg-secondary text-center">{state.message}</p>
           <div className="flex items-center gap-2">
-            <div className="min-w-0 flex-1">
-              <Input
-                leftIcon={<LinkIcon />}
-                placeholder="https://…/guide.xml (XMLTV)"
-                value={draftUrl}
-                onChange={(e) => setDraftUrl(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && draftUrl.trim() && applyUrl()}
-              />
-            </div>
-            <Button variant="secondary" disabled={!draftUrl.trim()} onClick={applyUrl}>
+            <Input
+              className="min-w-0 flex-1"
+              placeholder="https://…/guide.xml (XMLTV)"
+              value={draftUrl}
+              onChange={(e) => setDraftUrl(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && draftUrl.trim() && applyUrl()}
+            />
+            <Button
+              variant="secondary"
+              className="hover:bg-action-secondary-hover"
+              disabled={!draftUrl.trim()}
+              onClick={applyUrl}
+            >
               Load
             </Button>
           </div>
-          <p className="text-fg-secondary text-center text-xs">
-            Paste an XMLTV guide URL — e.g. your provider's EPG (the <code>url-tvg</code> from
-            its m3u). It's saved to this playlist.
+          <p className="text-caption text-fg-tertiary text-center">
+            Paste an XMLTV guide URL — e.g. your provider's EPG (the{" "}
+            <code className="font-mono">url-tvg</code> from its m3u). It's saved to this playlist.
           </p>
         </div>
       )}
@@ -127,26 +149,31 @@ export function EpgView({ playlist, channel }: EpgViewProps) {
   );
 }
 
-/** Sized skeleton — tr-ui's Skeleton can't be sized directly (no className). */
-function SkeletonBlock({ className }: { className: string }) {
-  return (
-    <div className={className}>
-      <Skeleton style={{ height: "100%", width: "100%" }} />
-    </div>
-  );
-}
-
 function ProgressBar({ value }: { value: number }) {
   const pct = Math.round(value * 100);
   return (
     <div
-      className="bg-bg-selection-container-hover h-1.5 w-full overflow-hidden rounded-full"
+      className="bg-surface-nested h-1.5 w-full overflow-hidden rounded-full"
       role="progressbar"
       aria-valuenow={pct}
       aria-valuemin={0}
       aria-valuemax={100}
     >
-      <div className="bg-bg-action-primary h-full rounded-full" style={{ width: `${pct}%` }} />
+      <div className="bg-action-primary h-full rounded-full" style={{ width: `${pct}%` }} />
+    </div>
+  );
+}
+
+function ScheduleRow({ programme, isNow }: { programme: Programme; isNow: boolean }) {
+  return (
+    <div
+      className={`flex items-baseline gap-3 px-3 py-2 ${isNow ? "bg-selection-container-active" : ""}`}
+    >
+      <span className="w-24 shrink-0">
+        <TimeRange start={programme.start} stop={programme.stop} />
+      </span>
+      <span className="text-body-m text-fg-primary min-w-0 flex-1 truncate">{programme.title}</span>
+      {isNow && <Badge>Now</Badge>}
     </div>
   );
 }
@@ -160,48 +187,34 @@ function Guide({ epg, now }: { epg: ChannelEpg; now: number }) {
   return (
     <div className="flex flex-col gap-4">
       {current ? (
-        <div className="border-border-secondary flex flex-col gap-2 rounded-[12px] border p-3">
+        <div className="bg-surface-container rounded-container shadow-1 flex flex-col gap-2 p-4">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="primary">Now</Badge>
+            <Badge>Now</Badge>
             {current.category && <Badge variant="secondary">{current.category}</Badge>}
-            <span className="text-fg-secondary text-sm tabular-nums">
-              {fmtTime(current.start)}–{fmtTime(current.stop)}
-            </span>
+            <TimeRange start={current.start} stop={current.stop} />
           </div>
-          <span className="text-fg-primary font-medium">{current.title}</span>
+          <span className="text-label-l text-fg-primary">{current.title}</span>
           <ProgressBar value={progress(current, now)} />
-          {current.desc && <p className="text-fg-secondary text-sm">{current.desc}</p>}
+          {current.desc && <p className="text-body-s text-fg-secondary">{current.desc}</p>}
         </div>
       ) : (
-        <p className="text-fg-secondary text-sm">Nothing on air right now.</p>
+        <p className="text-body-s text-fg-secondary">Nothing on air right now.</p>
       )}
 
       {next && (
         <div className="flex items-center gap-2">
           <Badge variant="secondary">Next</Badge>
-          <span className="text-fg-secondary shrink-0 text-sm tabular-nums">{fmtTime(next.start)}</span>
-          <span className="text-fg-primary min-w-0 truncate">{next.title}</span>
+          <TimeRange start={next.start} />
+          <span className="text-body-m text-fg-primary min-w-0 truncate">{next.title}</span>
         </div>
       )}
 
-      <div>
-        <h3 className="text-fg-secondary mb-1 px-1 text-sm font-medium">Schedule</h3>
-        <div className="border-border-secondary flex max-h-[40vh] flex-col overflow-y-auto rounded-[12px] border">
-          {list.map((p) => {
-            const isNow = p === current;
-            return (
-              <div
-                key={`${p.start}-${p.stop}-${p.title}`}
-                className={`flex items-baseline gap-3 px-3 py-2 ${isNow ? "bg-bg-selection-container-hover" : ""}`}
-              >
-                <span className="text-fg-secondary w-24 shrink-0 text-sm tabular-nums">
-                  {fmtTime(p.start)}–{fmtTime(p.stop)}
-                </span>
-                <span className="text-fg-primary min-w-0 flex-1 truncate">{p.title}</span>
-                {isNow && <Badge variant="primary">Now</Badge>}
-              </div>
-            );
-          })}
+      <div className="flex flex-col gap-1">
+        <h3 className="text-label-m text-fg-secondary px-1">Schedule</h3>
+        <div className="bg-surface-container rounded-container shadow-1 flex max-h-[40vh] flex-col divide-y overflow-y-auto">
+          {list.map((p) => (
+            <ScheduleRow key={`${p.start}-${p.stop}-${p.title}`} programme={p} isNow={p === current} />
+          ))}
         </div>
       </div>
     </div>

@@ -1,15 +1,11 @@
-@import "tailwindcss";
-@import "@novasamatech/tr-ui/styles.css";
-@config "../../tailwind.config.ts";
+/* Polkadot design system — pulls in Tailwind v4, the token primitives, the five
+   themes, the base layer (page surface, font stacks, global focus ring) and the
+   semantic utilities. Berlin Day is the default; Berlin Night renders when the
+   host (or the in-app toggle) sets data-theme="berlin-night". */
+@import "../theme/index.css";
 
 /* `tv:` variant for one-off TV tweaks in app markup (html.tv is set at boot). */
 @custom-variant tv (&:where(.tv, .tv *));
-
-/* TrUI's styles.css owns the page background: `body { background-color:
-   hsl(var(--background)) }`, switched by the `.dark` class on <html> (toggled by
-   ThemeProvider.setMode). We must NOT override `background` here, or the theme
-   won't switch. Keep app-specific styling token-based; never hardcode hex.
-   Pink/violet are brand accents — use sparingly (the "Live" indicator). */
 
 html,
 body,
@@ -17,35 +13,23 @@ body,
   height: 100%;
 }
 
-body {
-  margin: 0;
-  color: hsl(var(--foreground));
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-}
-
-/* Keyboard/desktop focus for the app's raw buttons (channel rows…) — tr-ui
-   components already ship their own focus ring. */
-:focus-visible {
-  outline: 2px solid hsl(var(--ring));
-  outline-offset: 2px;
-}
-
 /* ── TV mode (webOS) ──────────────────────────────────────────────────────────
-   The whole UI — tr-ui internals included — is rem-based, so scaling the root
-   font-size is the entire 10-foot theme: text, control heights, paddings and
-   radii grow together. Tailwind breakpoints stay pinned to 16px per the CSS
-   spec, so the player keeps its `lg:` side-by-side layout at 1080p/2160p. */
+   The whole UI — theme tokens and shadcn components included — is rem-based,
+   so scaling the root font-size is the entire 10-foot theme: text, control
+   heights, paddings and radii grow together. Tailwind breakpoints stay pinned
+   to 16px per the CSS spec, so the player keeps its `lg:` side-by-side layout
+   at 1080p/2160p. */
 html.tv {
   font-size: 24px;
 }
 
 /* Couch-visible focus ring. Plain `:focus`, not `:focus-visible`: D-pad focus
    is programmatic and must ALWAYS be visible (and older TV Chromium lacks
-   :focus-visible entirely). */
+   :focus-visible entirely). Overrides the base layer's 2px ring on TV. */
 html.tv :focus {
-  outline: 4px solid hsl(var(--ring));
+  outline: 4px solid var(--focus-ring);
   outline-offset: 3px;
+  box-shadow: none;
 }
 
 /* Overscan-safe margins: TVs may crop ~2-5% at the edges. */
@@ -59,8 +43,5 @@ html.tv .app-shell {
 @supports not (min-height: 100dvh) {
   .min-h-dvh {
     min-height: 100vh;
-  }
-  .min-h-\[58dvh\] {
-    min-height: 58vh;
   }
 }

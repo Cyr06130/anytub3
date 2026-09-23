@@ -1,10 +1,15 @@
+import type { AllocatableResource } from "@parity/product-sdk-host";
 import type { ChannelStore as ChannelStoreT } from "@parity/product-sdk-statement-store";
 import type { CloudStorageClient as CloudStorageClientT } from "@parity/product-sdk-cloud-storage";
+import { withAllowanceRetry, type AllowanceOutcome } from "@/lib/allowance";
 import { cidToPreimageKey, hashToCid } from "@/lib/cid";
-import { CLOUD_ENVIRONMENT, DOTNS_IDENTIFIER, APP_NAME, PRODUCT_DERIVATION_INDEX, SHARE_ROOM, STATEMENT_TTL_SECONDS } from "@/lib/config";
+import { CLOUD_ENVIRONMENT, APP_NAME, PRODUCT_DERIVATION_INDEX, SHARE_ROOM, STATEMENT_TTL_SECONDS } from "@/lib/config";
+import { currentDotNsIdentifier } from "@/lib/dotns";
 import { errorMessage } from "@/lib/errors";
-import type { ChannelEnvelope, ChannelLike, HostBridge } from "./types";
+import { describeHostTransport } from "./diagnostics";
 import { isHttpUrl } from "@/lib/url";
+import { HostBridgeError } from "./errors";
+import type { ChannelEnvelope, ChannelLike, HostBridge } from "./types";
 
 // ── Real host bridge ─────────────────────────────────────────────────────────
 // Wires the Parity product SDK. The SDK is *dynamically* imported so the
@@ -18,32 +23,89 @@ import { isHttpUrl } from "@/lib/url";
 const REAL_LOCAL_PREFIX = "anytub3.local.";
 
 type HostMod = typeof import("@parity/product-sdk-host");
+type TruApi = NonNullable<Awaited<ReturnType<HostMod["getTruApi"]>>>;
 type ProductAccount = { dotNsIdentifier: string; derivationIndex: number; publicKey: Uint8Array };
 type PreimageManager = NonNullable<Awaited<ReturnType<HostMod["getPreimageManager"]>>>;
 
-const HOST_READY_TIMEOUT_MS = 15_000;
-const HOST_READY_POLL_MS = 250;
+const HOST_CONNECT_TIMEOUT_MS = 15_000;
+
+/** The one signal the connection gate needs from the SDK. */
+export type HostConnection = Pick<HostMod, "subscribeConnectionStatus">;
 
 /**
- * Wait for the host's TruAPI handshake to complete. `isInsideContainer()` is a
- * synchronous heuristic (iframe/webview marker), but every service getter
- * (`getPreimageManager`, `getAccountsProvider`, `getStatementStore`, …) returns
- * null until the transport is actually CONNECTED — resolving them during the
- * handshake races it and freezes the bridge into a session-long "Bulletin
- * storage unavailable (preimage manager missing)" state. Resolves false when
- * the host never comes up within the timeout.
+ * Wait for the host channel to be CONNECTED. `isInsideContainer()` is a sync
+ * heuristic (iframe/webview marker) and every service getter is a facade over a
+ * client that exists as soon as a provider is *buildable* — neither proves the
+ * host is listening. Only the transport's own status does; resolving services
+ * before it races the handshake and freezes the bridge into a session-long
+ * "Bulletin storage unavailable". Resolves false if the host never comes up
+ * within the timeout.
  */
-export async function waitForTruApi(
-  host: Pick<HostMod, "getTruApi">,
-  opts: { timeoutMs?: number; pollMs?: number } = {},
-): Promise<boolean> {
-  const { timeoutMs = HOST_READY_TIMEOUT_MS, pollMs = HOST_READY_POLL_MS } = opts;
-  const deadline = Date.now() + timeoutMs;
-  do {
-    if (await host.getTruApi()) return true;
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
-  } while (Date.now() < deadline);
-  return (await host.getTruApi()) != null;
+export function waitForHostConnection(host: HostConnection, opts: { timeoutMs?: number } = {}): Promise<boolean> {
+  const { timeoutMs = HOST_CONNECT_TIMEOUT_MS } = opts;
+  return new Promise((resolve) => {
+    let settled = false;
+    let unsubscribe: (() => void) | null = null;
+    const finish = (connected: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      unsubscribe?.();
+      resolve(connected);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    // The callback fires synchronously with the current status, i.e. possibly
+    // before `unsubscribe` is assigned — hence the post-subscribe cleanup.
+    unsubscribe = host.subscribeConnectionStatus((status) => {
+      if (status === "connected") finish(true);
+    });
+    if (settled) unsubscribe();
+  });
+}
+
+/**
+/** The one call the handshake needs from the SDK. */
+export type HandshakeHost = Pick<HostMod, "formatHostError">;
+/** The one call the handshake needs from the TruAPI client. */
+export type HandshakePeer = { system: Pick<TruApi["system"], "handshake"> };
+
+/**
+ * Ask the host to confirm it speaks this build's TruAPI codec. The wire format
+ * changed incompatibly between truapi ≤0.13 (codec v1), 0.16 (v2) and ≥0.17
+ * (v3): a stale build against a current host fails every call with opaque
+ * decode errors, or hangs. Two outcomes deserve the blocking screen:
+ *
+ * - the host ANSWERS `UnsupportedProtocolVersion` → this build must be redeployed;
+ * - the host never answers (the client's own 10 s deadline rejects, or the pipe
+ *   dies) → the bridge is up but silent. Seen on Polkadot Mobile when the
+ *   container's loopback WebSocket was blocked by our CSP: every later call
+ *   would wait out its 120 s deadline, so failing here with the transport
+ *   diagnostics beats a frozen app.
+ *
+ * Any other domain error only warns: the real calls decide.
+ */
+export async function negotiateProtocol(host: HandshakeHost, truApi: HandshakePeer): Promise<void> {
+  let failure: string | null;
+  try {
+    failure = await truApi.system.handshake().match(
+      () => null,
+      (error) => host.formatHostError(error),
+    );
+  } catch (error) {
+    throw new HostBridgeError("The Polkadot host accepted the connection but never answered the protocol handshake.", {
+      cause: error,
+      hint: "Fully close the Polkadot app, then reopen AnyTub3. If it keeps happening, update the Polkadot app: its bridge to this page stayed silent.",
+      details: `${errorMessage(error)} · ${describeHostTransport()}`,
+    });
+  }
+  if (failure === null) return;
+  if (/UnsupportedProtocolVersion/i.test(failure)) {
+    throw new HostBridgeError(`The host refused this build's protocol version (${failure}).`, {
+      hint: "AnyTub3 and the host speak different TruAPI codec versions — this build must be updated and redeployed.",
+      details: describeHostTransport(),
+    });
+  }
+  console.warn("[AnyTub3] host handshake did not complete, continuing:", failure);
 }
 
 const PREIMAGE_LOOKUP_TIMEOUT_MS = 30_000;
@@ -86,12 +148,25 @@ export async function createRealBridge(): Promise<HostBridge> {
   let ChannelStoreCtor: typeof ChannelStoreT | null = null;
   const channels = new Map<string, ChannelLike>();
   let shareRoomReady = false; // registerRoom is idempotent; only call it once.
+  // The host binds the product account to the domain it loaded us from.
+  const dotNsIdentifier = currentDotNsIdentifier();
 
   function accountId(): [string, number] {
     return [
-      productAccount?.dotNsIdentifier ?? DOTNS_IDENTIFIER,
+      productAccount?.dotNsIdentifier ?? dotNsIdentifier,
       productAccount?.derivationIndex ?? PRODUCT_DERIVATION_INDEX,
     ];
+  }
+
+  /** Ask the host for one RFC-0010 allowance; null when the call itself failed.
+   *  Only ever called from a write's failure path (see lib/allowance.ts). */
+  async function requestAllowance(resource: AllocatableResource): Promise<AllowanceOutcome | null> {
+    const result = await host.requestResourceAllocation([resource]);
+    if (!result.ok) {
+      console.warn(`[AnyTub3] ${resource.tag} request failed:`, host.formatHostError(result.error));
+      return null;
+    }
+    return result.value[0] ?? null;
   }
 
   /** Resolve (and cache) the sponsored preimage manager. Retried on every call:
@@ -161,13 +236,18 @@ export async function createRealBridge(): Promise<HostBridge> {
     async init() {
       host = await import("@parity/product-sdk-host");
 
-      // 0. Gate on the transport: without this, a slow handshake makes every
-      //    service below resolve null and the session boots half-dead. On a
-      //    genuine timeout, throw — getBridge()'s fallback boundary then hands
-      //    the app to the mock bridge instead of a broken real one.
-      if (!(await waitForTruApi(host))) {
-        throw new Error("Host transport not ready (TruAPI handshake timed out)");
+      // 0. Gate on the transport, then on the protocol. Both throw a
+      //    HostBridgeError: getBridge() surfaces it as a blocking screen with
+      //    Retry — never a silent mock fallback inside a host.
+      if (!(await waitForHostConnection(host))) {
+        throw new HostBridgeError("The Polkadot host did not connect within 15 seconds.", {
+          hint: "Close and reopen AnyTub3 from the host, then retry.",
+          details: describeHostTransport(),
+        });
       }
+      const truApi = await host.getTruApi();
+      if (!truApi) throw new HostBridgeError("The Polkadot host transport is unavailable.");
+      await negotiateProtocol(host, truApi);
 
       // 1. Accounts: ensure the host session is connected, resolve the product account.
       accountsProvider = await host.getAccountsProvider();
@@ -177,13 +257,14 @@ export async function createRealBridge(): Promise<HostBridge> {
           (e) => console.warn("[AnyTub3] login error:", e),
         );
         productAccount = await accountsProvider
-          .getProductAccount(DOTNS_IDENTIFIER, PRODUCT_DERIVATION_INDEX)
+          .getProductAccount(dotNsIdentifier, PRODUCT_DERIVATION_INDEX)
           .match(
             (acc) => acc as ProductAccount,
             (e) => {
-              // In dev the app loads as localhost:<port>, not anytub3.dot, so the
-              // host may reject the product-account domain — chain writes then fail.
-              console.warn("[AnyTub3] getProductAccount failed (domain?):", e);
+              // In dev the app loads as localhost:<port>, not a dotNS name, so
+              // the host rejects the domain — only the direct-client fallback
+              // (which needs a signer) is affected; sponsored paths still work.
+              console.warn(`[AnyTub3] getProductAccount(${dotNsIdentifier}) failed:`, e);
               return null;
             },
           );
@@ -239,9 +320,14 @@ export async function createRealBridge(): Promise<HostBridge> {
 
     async cloudStore(bytes: Uint8Array) {
       // Sponsored host path: submit → preimage key → CID (interoperable pointer).
+      // A lapsed BulletinAllowance is re-requested once, on failure only.
       const pm = await ensurePreimage();
       if (pm) {
-        return hashToCid(await pm.submit(bytes));
+        const key = await withAllowanceRetry(
+          () => pm.submit(bytes),
+          () => requestAllowance({ tag: "BulletinAllowance", value: undefined }),
+        );
+        return hashToCid(key);
       }
       const client = await ensureCloudClient();
       if (client) {
@@ -291,9 +377,15 @@ export async function createRealBridge(): Promise<HostBridge> {
       ch = {
         async write(channelName, value) {
           // ChannelStore.write returns a Result and never throws (SDK ≥0.6) —
-          // a rejected statement must surface to the caller, not vanish.
-          const result = await store.write(channelName, value);
-          if (!result.ok) throw result.error;
+          // a rejected statement must surface to the caller, not vanish. A
+          // lapsed StatementStoreAllowance is re-requested once, on failure.
+          await withAllowanceRetry(
+            async () => {
+              const result = await store.write(channelName, value);
+              if (!result.ok) throw result.error;
+            },
+            () => requestAllowance({ tag: "StatementStoreAllowance", value: undefined }),
+          );
         },
         read(channelName) {
           return store.read(channelName);

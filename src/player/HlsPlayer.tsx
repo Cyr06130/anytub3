@@ -271,7 +271,7 @@ export function HlsPlayer({
             fillMode
               ? // Fill the screen (scale up), not the intrinsic 720p/1080p box.
                 "h-full w-full object-contain bg-black"
-              : "aspect-video w-full rounded-[12px] bg-black"
+              : "rounded-container aspect-video w-full bg-black"
           }
         />
         {fullscreenButton && (
@@ -279,7 +279,7 @@ export function HlsPlayer({
             type="button"
             onClick={() => void toggleFullscreen()}
             aria-label={fsActive ? "Exit fullscreen" : "Fullscreen"}
-            className={`absolute right-2 top-2 rounded-[8px] bg-black/55 p-2 text-white transition-opacity hover:bg-black/75 focus-visible:opacity-100 ${
+            className={`rounded-medium text-fg-static-white absolute right-2 top-2 cursor-pointer bg-black/55 p-2 transition-opacity hover:bg-black/75 focus-visible:opacity-100 ${
               cssFs ? "opacity-100" : "opacity-0 group-hover:opacity-100"
             }`}
           >
@@ -288,7 +288,7 @@ export function HlsPlayer({
         )}
       </div>
       {loading && !cssFs && !fill && (
-        <p className="text-fg-secondary mt-2 text-center text-sm" aria-live="polite">
+        <p className="text-body-s text-fg-secondary mt-2 text-center" aria-live="polite">
           Connecting to stream…
         </p>
       )}

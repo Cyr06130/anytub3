@@ -19,3 +19,6 @@ test-results
 .env
 .env.*
 .DS_Store
+
+# Stray local template checkout (separate git repo, not part of AnyTub3)
+playground-template-*/

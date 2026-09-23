@@ -1,6 +1,6 @@
-import { toastError, toastInfo } from "@novasamatech/tr-ui";
+import { toastError, toastInfo } from "@/lib/toast";
 import type { LibraryHead, LibraryIndex, NowPlaying, Playlist } from "@/types";
-import { getBridge } from "@/lib/bridge";
+import { getBridge, HostBridgeError, type HostBridge } from "@/lib/bridge";
 import { loadLibraryIndex, loadOwnPlaylist } from "@/lib/bulletin";
 import { errorMessage } from "@/lib/errors";
 import { currentUserId } from "@/lib/host";
@@ -18,7 +18,7 @@ import {
   readNowPlaying,
   startLibHeartbeat,
 } from "@/lib/sync";
-import { getState, setState } from "./app-state";
+import { getState, setState, type HostFailure } from "./app-state";
 import {
   republishHead,
   simulateMaliciousShareCode,
@@ -35,8 +35,18 @@ let booted = false;
 export async function bootstrap(): Promise<void> {
   if (booted) return;
   booted = true;
+  let bridge: HostBridge;
   try {
-    const bridge = await getBridge();
+    bridge = await getBridge();
+  } catch (e) {
+    // In-host only: no usable bridge to the Polkadot host (never connected,
+    // protocol version refused, SDK failed to load). Block on the reason —
+    // continuing on the mock would "save" to localStorage under fake CIDs.
+    console.error("[AnyTub3] host bridge unavailable:", e);
+    setState({ hostError: describeHostFailure(e), ready: true, loading: false });
+    return;
+  }
+  try {
     setState({ inHost: bridge.inHost });
     await initSync();
 
@@ -45,7 +55,8 @@ export async function bootstrap(): Promise<void> {
     // Allowances are never requested here: `requestResourceAllocation` always
     // shows the host dialog, while the host provisions Bulletin + Statement
     // Store allowances implicitly on the first write (RFC-0010). Skipping the
-    // explicit request keeps saving fully functional with zero prompts.
+    // explicit request keeps saving fully functional with zero prompts; a
+    // lapsed allowance is re-requested once, on write failure (lib/allowance.ts).
 
     if (!bridge.inHost) await exposeDemoHooks();
 
@@ -77,6 +88,20 @@ export async function bootstrap(): Promise<void> {
   } finally {
     setState({ ready: true, loading: false });
   }
+}
+
+function describeHostFailure(e: unknown): HostFailure {
+  if (e instanceof HostBridgeError) return { message: e.message, hint: e.hint, details: e.details };
+  return { message: errorMessage(e, "Unknown host error") };
+}
+
+/** Retry after a host bridge failure. getBridge() dropped its cache on the
+ *  failure, so this re-runs detection, the connection gate and the protocol
+ *  handshake from scratch — no page reload needed. */
+export async function retryBootstrap(): Promise<void> {
+  booted = false;
+  setState({ hostError: null, ready: false, loading: true });
+  await bootstrap();
 }
 
 /** Off-host only: hooks for the demo and the e2e suite (no second user or real

@@ -1,5 +1,5 @@
-import { Button } from "@novasamatech/tr-ui";
 import { ArrowLeft } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { goBack } from "@/state/navigation";
 
 type ScreenHeaderProps = {
@@ -14,13 +14,18 @@ export function ScreenHeader({ title, description }: ScreenHeaderProps) {
   return (
     <div className="flex flex-col gap-2">
       <div>
-        <Button variant="ghost" size="sm" onClick={() => goBack()}>
-          <ArrowLeft /> Back
+        <Button
+          variant="ghost"
+          size="sm"
+          className="font-normal hover:bg-action-tertiary-hover"
+          onClick={() => goBack()}
+        >
+          <ArrowLeft aria-hidden /> Back
         </Button>
       </div>
       <div className="flex flex-col gap-1">
-        <h2 className="text-fg-primary text-lg font-semibold">{title}</h2>
-        {description && <p className="text-fg-secondary text-sm">{description}</p>}
+        <h2 className="text-heading-m text-fg-primary">{title}</h2>
+        {description && <p className="text-body-m text-fg-secondary">{description}</p>}
       </div>
     </div>
   );

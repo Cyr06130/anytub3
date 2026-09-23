@@ -1,4 +1,4 @@
-import { aesGcmDecryptPacked, aesGcmEncryptPacked } from "@parity/product-sdk-crypto";
+import { aesGcmDecryptPacked, aesGcmEncryptPacked } from "@/lib/aes";
 import { base64FromBytes, bytesFromBase64, utf8 } from "@/lib/bytes";
 import type { ChannelEnvelope } from "@/lib/bridge/types";
 

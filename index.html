@@ -10,12 +10,23 @@
       - default-src 'self'
       - HLS streams + logos are http(s) only (sanitized in m3u.ts); we allow them via media/img/connect.
       - hls.js spawns workers from blob: URLs → worker-src blob:.
-      - 'unsafe-inline' on style is required by Tailwind/TrUI injected styles.
+      - 'unsafe-inline' on style is required by Tailwind injected styles.
+      - Google Fonts (Inter/Manrope/Martian Mono) need style-src googleapis + font-src gstatic;
+        the token font stacks fall back to system faces when the host blocks them.
+      - Native hosts (Polkadot Mobile/Desktop) bridge TruAPI over a LOOPBACK endpoint: a
+        document-start script connects the product to ws://127.0.0.1:<port> (and may use
+        plain http on loopback). connect-src must allow loopback or every host call is blocked
+        once this meta CSP is parsed; loopback-only, so nothing else is widened.
       In production behind the host, tighten further as the host CSP allows.
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' https: wss:; frame-ancestors *"
+      content="default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' https: wss: http://127.0.0.1:* ws://127.0.0.1:* http://localhost:* ws://localhost:*; frame-ancestors *"
+    />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Manrope:wght@500;600;700&family=Martian+Mono:wght@400;500&display=swap"
     />
   </head>
   <body>

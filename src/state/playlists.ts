@@ -1,4 +1,4 @@
-import { toastError, toastSuccess } from "@novasamatech/tr-ui";
+import { toastError, toastSuccess, toastUndo } from "@/lib/toast";
 import type { Channel, Playlist } from "@/types";
 import { buildLibraryIndex, storeLibraryIndex, storePlaylist } from "@/lib/bulletin";
 import { errorMessage } from "@/lib/errors";
@@ -194,5 +194,12 @@ export async function deletePlaylist(id: string): Promise<void> {
   }
   setState({ playlists: getState().playlists.filter((p) => p.id !== id) });
   await persistLibrary();
-  toastSuccess({ title: "Playlist deleted", description: pl.title });
+  // Act first, offer Undo — never a confirmation dialog. The body blob is
+  // immutable on Bulletin, so restoring is just re-indexing the same CID.
+  toastUndo({ title: "Playlist deleted", description: pl.title, onUndo: () => void restorePlaylist(pl) });
+}
+
+async function restorePlaylist(pl: Playlist): Promise<void> {
+  setState({ playlists: [...getState().playlists, pl] });
+  await persistLibrary();
 }

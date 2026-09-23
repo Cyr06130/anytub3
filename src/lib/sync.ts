@@ -1,4 +1,4 @@
-import { bytesToHex } from "@parity/product-sdk-crypto";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { bridgeIfReady, getBridge } from "@/lib/bridge";
 import { utf8 } from "@/lib/bytes";
 import { openEnvelope, sealEnvelope } from "@/lib/envelope";
