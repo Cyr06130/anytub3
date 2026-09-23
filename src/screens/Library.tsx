@@ -1,25 +1,21 @@
-import { useState } from "react";
-import { Card, ListItem, Empty, Badge, Button, DropdownMenu, AlertDialog } from "@novasamatech/tr-ui";
-import { Tv, Plus, Share2, MoreVertical, Pencil, Trash2 } from "lucide-react";
-import type { Playlist } from "@/types";
-import { deletePlaylist, tune, useApp } from "@/state/store";
-import { EditPlaylist } from "@/screens/EditPlaylist";
+import { Tv, Plus, Share2, Pencil, Trash2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useApp } from "@/state/app-state";
+import { navigate } from "@/state/navigation";
+import { deletePlaylist, tune } from "@/state/playlists";
+import { ChannelRow } from "@/components/ChannelRow";
 
-type LibraryProps = {
-  onAdd: () => void;
-  onShare: (playlistId: string) => void;
-};
-
-export function Library({ onAdd, onShare }: LibraryProps) {
+export function Library() {
   const { playlists, loading, nowPlayingChannelId } = useApp();
-  const [editing, setEditing] = useState<Playlist | null>(null);
-  const [deleting, setDeleting] = useState<Playlist | null>(null);
 
   if (loading) {
     return (
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-3">
         {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="bg-bg-selection-container-hover h-14 w-full animate-pulse rounded-[12px]" />
+          <Skeleton key={i} className="rounded-nested h-14 w-full" />
         ))}
       </div>
     );
@@ -27,23 +23,23 @@ export function Library({ onAdd, onShare }: LibraryProps) {
 
   if (!playlists.length) {
     return (
-      <div className="flex min-h-[58dvh] flex-col items-center justify-center">
-        <Empty>
-          <Empty.Media variant="icon">
-            <Tv />
-          </Empty.Media>
-          <Empty.Header>
-            <Empty.Title>No playlists yet</Empty.Title>
-            <Empty.Description>
-              Add an .m3u file or URL — or paste a share code a contact sent you.
-            </Empty.Description>
-          </Empty.Header>
-          <Empty.Content>
-            <Button size="lg" onClick={onAdd}>
-              <Plus /> Add a playlist
-            </Button>
-          </Empty.Content>
-        </Empty>
+      <div className="flex min-h-[58dvh] flex-col items-center justify-center gap-4 text-center">
+        <div className="bg-surface-container shadow-1 flex size-14 items-center justify-center rounded-full">
+          <Tv aria-hidden className="text-fg-secondary size-6" />
+        </div>
+        <div className="flex flex-col gap-1">
+          <h2 className="text-heading-m text-fg-primary">No playlists yet</h2>
+          <p className="text-body-m text-fg-secondary max-w-sm">
+            Add an .m3u file or URL — or paste a share code a contact sent you.
+          </p>
+        </div>
+        <Button
+          size="lg"
+          className="rounded-full px-6 font-semibold hover:bg-action-primary-hover"
+          onClick={() => navigate({ name: "add" })}
+        >
+          <Plus aria-hidden /> Add a playlist
+        </Button>
       </div>
     );
   }
@@ -51,101 +47,72 @@ export function Library({ onAdd, onShare }: LibraryProps) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-fg-primary text-lg font-semibold">My channels</h2>
-        <Button size="sm" variant="secondary" onClick={onAdd}>
-          <Plus /> Add
+        <h2 className="text-heading-m text-fg-primary">My channels</h2>
+        <Button
+          size="sm"
+          variant="secondary"
+          className="hover:bg-action-secondary-hover"
+          onClick={() => navigate({ name: "add" })}
+        >
+          <Plus aria-hidden /> Add
         </Button>
       </div>
 
       {playlists.map((pl) => (
-        <Card key={pl.id}>
-          <Card.Header>
-            <div className="flex items-center justify-between gap-2">
-              <div className="min-w-0 flex-1">
-                <Card.Title>
-                  <span className="block truncate">{pl.title}</span>
-                </Card.Title>
-              </div>
-              <div className="flex shrink-0 items-center gap-1 sm:gap-2">
-                <Badge variant="secondary">{pl.entries.length} channels</Badge>
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label="Share playlist"
-                  disabled={!pl.cid}
-                  onClick={() => onShare(pl.id)}
-                >
-                  <Share2 />
-                </Button>
-                <DropdownMenu>
-                  <DropdownMenu.Trigger asChild>
-                    <Button size="icon-sm" variant="ghost" aria-label="Playlist actions">
-                      <MoreVertical />
-                    </Button>
-                  </DropdownMenu.Trigger>
-                  <DropdownMenu.Content>
-                    <DropdownMenu.Item onSelect={() => setEditing(pl)}>
-                      <Pencil /> Edit
-                    </DropdownMenu.Item>
-                    <DropdownMenu.Item variant="destructive" onSelect={() => setDeleting(pl)}>
-                      <Trash2 /> Delete
-                    </DropdownMenu.Item>
-                  </DropdownMenu.Content>
-                </DropdownMenu>
-              </div>
-            </div>
-          </Card.Header>
-          <Card.Content>
+        <Card key={pl.id} className="group/card">
+          <CardHeader>
+            <CardTitle className="min-w-0">
+              <h3 className="truncate">{pl.title}</h3>
+            </CardTitle>
+            <CardAction className="flex items-center gap-1 sm:gap-2">
+              <Badge variant="secondary">{pl.entries.length} channels</Badge>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                className="hover:bg-action-tertiary-hover"
+                aria-label="Share playlist"
+                disabled={!pl.cid}
+                onClick={() => navigate({ name: "share", playlistId: pl.id })}
+              >
+                <Share2 />
+              </Button>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                className="hover:bg-action-tertiary-hover"
+                aria-label="Edit playlist"
+                onClick={() => navigate({ name: "edit", playlistId: pl.id })}
+              >
+                <Pencil />
+              </Button>
+              {/* Destructive action: hidden at rest, revealed on hover/focus.
+                  Deletion is immediate + Undo toast — no confirmation step. */}
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                className="text-fg-error opacity-0 transition-opacity group-hover/card:opacity-100 focus:opacity-100 tv:opacity-100 hover:bg-action-error"
+                aria-label="Delete playlist"
+                onClick={() => void deletePlaylist(pl.id)}
+              >
+                <Trash2 />
+              </Button>
+            </CardAction>
+          </CardHeader>
+          <CardContent>
             <div className="-mx-2 flex max-h-80 flex-col overflow-y-auto">
               {pl.entries.map((ch) => (
-                <button
+                <ChannelRow
                   key={ch.id}
-                  onClick={() => void tune(pl.id, ch)}
-                  className="hover:bg-bg-selection-container-hover w-full rounded-[8px] text-left"
-                >
-                  <ListItem
-                    variant="icon-label"
-                    icon={<Tv />}
-                    title={ch.name}
-                    description={ch.group}
-                    trailingLabel={
-                      ch.id === nowPlayingChannelId ? <Badge variant="primary">Live</Badge> : undefined
-                    }
-                  />
-                </button>
+                  channel={ch}
+                  active={ch.id === nowPlayingChannelId}
+                  onTune={() => void tune(pl.id, ch)}
+                  onGuide={() => navigate({ name: "epg", playlistId: pl.id, channelId: ch.id })}
+                />
               ))}
             </div>
-          </Card.Content>
+          </CardContent>
         </Card>
       ))}
-
-      <EditPlaylist open={editing !== null} onOpenChange={(o) => !o && setEditing(null)} playlist={editing} />
-
-      <AlertDialog open={deleting !== null} onOpenChange={(o) => !o && setDeleting(null)}>
-        <AlertDialog.Content>
-          <AlertDialog.Header>
-            <AlertDialog.Title>Delete playlist?</AlertDialog.Title>
-            <AlertDialog.Description>
-              "{deleting?.title}" will be removed from your library. The channels remain retrievable from Bulletin as long as you know the CID.
-            </AlertDialog.Description>
-          </AlertDialog.Header>
-          <AlertDialog.Footer>
-            <div className="flex w-full flex-wrap justify-center gap-2">
-              <AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
-              <AlertDialog.Action
-                variant="destructive"
-                onClick={() => {
-                  const target = deleting;
-                  setDeleting(null);
-                  if (target) void deletePlaylist(target.id);
-                }}
-              >
-                Delete
-              </AlertDialog.Action>
-            </div>
-          </AlertDialog.Footer>
-        </AlertDialog.Content>
-      </AlertDialog>
     </div>
   );
 }

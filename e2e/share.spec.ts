@@ -128,8 +128,10 @@ test.describe("sharing", () => {
     await importCode(page, ghost);
 
     await expect(page.getByText(/Receive failed/)).toBeVisible();
-    // No white screen: the shell and the empty state survive.
+    // No white screen: the shell survives, and Back returns to the empty state
+    // (the failed import leaves us on the add screen).
     await expect(page.getByText("AnyTub3").first()).toBeVisible();
+    await page.getByRole("button", { name: "Back" }).click();
     await expect(page.getByText("No playlists")).toBeVisible();
   });
 

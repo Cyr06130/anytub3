@@ -1,5 +1,7 @@
-import { sha256 } from "@parity/product-sdk-crypto";
+import { sha256 } from "@noble/hashes/sha2.js";
 import type { ChannelEnvelope, ChannelLike, HostBridge } from "./types";
+import { cutAt, fetchBytes, fetchText, fetchTextPrefix } from "./http";
+import { base64FromBytes, bytesFromBase64, utf8 } from "@/lib/bytes";
 
 // ── Standalone / dev bridge ──────────────────────────────────────────────────
 // Emulates the host out of a container (design: "dev off-host → degraded mode").
@@ -22,23 +24,32 @@ const CLOUD_PREFIX = "anytub3.mock.cloud.";
 const CHAN_PREFIX = "anytub3.mock.chan.";
 const LOCAL_PREFIX = "anytub3.mock.local.";
 
-function b64encode(bytes: Uint8Array): string {
-  let s = "";
-  for (const b of bytes) s += String.fromCharCode(b);
-  return btoa(s);
+// Deterministic httpGet fixtures (e2e + demo): exact-URL → response body. A
+// registered fixture short-circuits the network so EPG tests never flake on a
+// live host. Stored on globalThis so a Playwright init script can seed it before
+// the app boots. Anything not registered falls through to a real fetch (so the
+// demo can still pull a real provider's XMLTV when CORS allows).
+const HTTP_FIXTURES: Map<string, string> = ((
+  globalThis as unknown as { __ANYTUB3_HTTP_FIXTURES__?: Map<string, string> }
+).__ANYTUB3_HTTP_FIXTURES__ ??= new Map());
+
+export function setHttpFixture(url: string, body: string): void {
+  HTTP_FIXTURES.set(url, body);
 }
-function b64decode(s: string): Uint8Array {
-  const bin = atob(s);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
+
+// e2e/demo seam: simulate the statement store rejecting writes (what a real
+// host does on quota/authorization failures), so tests can prove a failed
+// resume-pointer publish is surfaced to the user instead of swallowed.
+let channelWritesFail = false;
+export function setChannelWriteFailure(fail: boolean): void {
+  channelWritesFail = fail;
 }
 
 function getOrCreateSeed(): Uint8Array {
   const existing = localStorage.getItem(SEED_KEY);
-  if (existing) return b64decode(existing);
+  if (existing) return bytesFromBase64(existing);
   const seed = crypto.getRandomValues(new Uint8Array(32));
-  localStorage.setItem(SEED_KEY, b64encode(seed));
+  localStorage.setItem(SEED_KEY, base64FromBytes(seed));
   return seed;
 }
 
@@ -63,6 +74,10 @@ class MockChannel implements ChannelLike {
     this.bc = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(CHAN_PREFIX + topic2) : null;
     this.bc?.addEventListener("message", (ev: MessageEvent) => {
       const { channelName, value } = ev.data as { channelName: string; value: ChannelEnvelope };
+      // Same last-write-wins guard as write(): a late message from a lagging
+      // tab must not regress the persisted head that read() then serves.
+      const prev = this.read(channelName);
+      if (prev && prev.timestamp > value.timestamp) return;
       this.persist(channelName, value);
       this.deliver(channelName, value);
     });
@@ -82,6 +97,7 @@ class MockChannel implements ChannelLike {
   }
 
   async write(channelName: string, value: ChannelEnvelope): Promise<void> {
+    if (channelWritesFail) throw new Error("Simulated statement rejection (demo seam)");
     const prev = this.read(channelName);
     if (prev && prev.timestamp > value.timestamp) return; // last-write-wins
     this.persist(channelName, value);
@@ -114,7 +130,7 @@ export function createMockBridge(): HostBridge {
 
     async getUserId() {
       // Stable pseudo-identity from the seed.
-      return `mock-${b64encode(seed).slice(0, 10)}`;
+      return `mock-${base64FromBytes(seed).slice(0, 10)}`;
     },
 
     subscribeTheme(cb) {
@@ -133,23 +149,33 @@ export function createMockBridge(): HostBridge {
       return sha256(buf);
     },
 
-    async preallocate() {
-      return true; // no allowances needed off-host
-    },
-
     async cloudStore(bytes: Uint8Array) {
       const digest = sha256(bytes);
       let hex = "";
       for (const b of digest) hex += b.toString(16).padStart(2, "0");
       const cid = `bafymock${hex.slice(0, 48)}`; // CID-ish, content-addressed
-      localStorage.setItem(CLOUD_PREFIX + cid, b64encode(bytes));
+      localStorage.setItem(CLOUD_PREFIX + cid, base64FromBytes(bytes));
       return cid;
     },
 
     async cloudFetch(cid: string) {
       const raw = localStorage.getItem(CLOUD_PREFIX + cid);
       if (!raw) throw new Error(`Mock cloud: CID not found ${cid}`);
-      return b64decode(raw);
+      return bytesFromBase64(raw);
+    },
+
+    // No fixture → behave like the real bridge (lets the demo fetch a real
+    // provider's guide when CORS permits).
+    async httpGet(url: string) {
+      return HTTP_FIXTURES.get(url) ?? fetchText(url);
+    },
+    async httpGetBytes(url: string) {
+      const fixture = HTTP_FIXTURES.get(url);
+      return fixture !== undefined ? utf8(fixture) : fetchBytes(url);
+    },
+    async httpGetPrefix(url: string, opts) {
+      const fixture = HTTP_FIXTURES.get(url);
+      return fixture !== undefined ? cutAt(fixture, opts.until) : fetchTextPrefix(url, opts);
     },
 
     channel(topic2: string) {

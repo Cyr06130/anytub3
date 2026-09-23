@@ -1,6 +1,14 @@
+import type { AllocatableResource } from "@parity/product-sdk-host";
 import type { ChannelStore as ChannelStoreT } from "@parity/product-sdk-statement-store";
 import type { CloudStorageClient as CloudStorageClientT } from "@parity/product-sdk-cloud-storage";
-import { CLOUD_ENVIRONMENT, DOTNS_IDENTIFIER, APP_NAME, PRODUCT_DERIVATION_INDEX, SHARE_ROOM } from "@/lib/config";
+import { withAllowanceRetry, type AllowanceOutcome } from "@/lib/allowance";
+import { cidToPreimageKey, hashToCid } from "@/lib/cid";
+import { CLOUD_ENVIRONMENT, APP_NAME, PRODUCT_DERIVATION_INDEX, SHARE_ROOM, STATEMENT_TTL_SECONDS } from "@/lib/config";
+import { currentDotNsIdentifier } from "@/lib/dotns";
+import { errorMessage } from "@/lib/errors";
+import { describeHostTransport } from "./diagnostics";
+import { HostBridgeError } from "./errors";
+import { fetchBytes, fetchText, fetchTextPrefix } from "./http";
 import type { ChannelEnvelope, ChannelLike, HostBridge } from "./types";
 
 // ── Real host bridge ─────────────────────────────────────────────────────────
@@ -15,26 +23,196 @@ import type { ChannelEnvelope, ChannelLike, HostBridge } from "./types";
 const REAL_LOCAL_PREFIX = "anytub3.local.";
 
 type HostMod = typeof import("@parity/product-sdk-host");
+type TruApi = NonNullable<Awaited<ReturnType<HostMod["getTruApi"]>>>;
 type ProductAccount = { dotNsIdentifier: string; derivationIndex: number; publicKey: Uint8Array };
+type PreimageManager = NonNullable<Awaited<ReturnType<HostMod["getPreimageManager"]>>>;
+
+const HOST_CONNECT_TIMEOUT_MS = 15_000;
+
+/** The one signal the connection gate needs from the SDK. */
+export type HostConnection = Pick<HostMod, "subscribeConnectionStatus">;
+
+/**
+ * Wait for the host channel to be CONNECTED. `isInsideContainer()` is a sync
+ * heuristic (iframe/webview marker) and every service getter is a facade over a
+ * client that exists as soon as a provider is *buildable* — neither proves the
+ * host is listening. Only the transport's own status does; resolving services
+ * before it races the handshake and freezes the bridge into a session-long
+ * "Bulletin storage unavailable". Resolves false if the host never comes up
+ * within the timeout.
+ */
+export function waitForHostConnection(host: HostConnection, opts: { timeoutMs?: number } = {}): Promise<boolean> {
+  const { timeoutMs = HOST_CONNECT_TIMEOUT_MS } = opts;
+  return new Promise((resolve) => {
+    let settled = false;
+    let unsubscribe: (() => void) | null = null;
+    const finish = (connected: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      unsubscribe?.();
+      resolve(connected);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    // The callback fires synchronously with the current status, i.e. possibly
+    // before `unsubscribe` is assigned — hence the post-subscribe cleanup.
+    unsubscribe = host.subscribeConnectionStatus((status) => {
+      if (status === "connected") finish(true);
+    });
+    if (settled) unsubscribe();
+  });
+}
+
+/**
+/** The one call the handshake needs from the SDK. */
+export type HandshakeHost = Pick<HostMod, "formatHostError">;
+/** The one call the handshake needs from the TruAPI client. */
+export type HandshakePeer = { system: Pick<TruApi["system"], "handshake"> };
+
+/**
+ * Ask the host to confirm it speaks this build's TruAPI codec. The wire format
+ * changed incompatibly between truapi ≤0.13 (codec v1), 0.16 (v2) and ≥0.17
+ * (v3): a stale build against a current host fails every call with opaque
+ * decode errors, or hangs. Two outcomes deserve the blocking screen:
+ *
+ * - the host ANSWERS `UnsupportedProtocolVersion` → this build must be redeployed;
+ * - the host never answers (the client's own 10 s deadline rejects, or the pipe
+ *   dies) → the bridge is up but silent. Seen on Polkadot Mobile when the
+ *   container's loopback WebSocket was blocked by our CSP: every later call
+ *   would wait out its 120 s deadline, so failing here with the transport
+ *   diagnostics beats a frozen app.
+ *
+ * Any other domain error only warns: the real calls decide.
+ */
+export async function negotiateProtocol(host: HandshakeHost, truApi: HandshakePeer): Promise<void> {
+  let failure: string | null;
+  try {
+    failure = await truApi.system.handshake().match(
+      () => null,
+      (error) => host.formatHostError(error),
+    );
+  } catch (error) {
+    throw new HostBridgeError("The Polkadot host accepted the connection but never answered the protocol handshake.", {
+      cause: error,
+      hint: "Fully close the Polkadot app, then reopen AnyTub3. If it keeps happening, update the Polkadot app: its bridge to this page stayed silent.",
+      details: `${errorMessage(error)} · ${describeHostTransport()}`,
+    });
+  }
+  if (failure === null) return;
+  if (/UnsupportedProtocolVersion/i.test(failure)) {
+    throw new HostBridgeError(`The host refused this build's protocol version (${failure}).`, {
+      hint: "AnyTub3 and the host speak different TruAPI codec versions — this build must be updated and redeployed.",
+      details: describeHostTransport(),
+    });
+  }
+  console.warn("[AnyTub3] host handshake did not complete, continuing:", failure);
+}
+
+const PREIMAGE_LOOKUP_TIMEOUT_MS = 30_000;
+
+/** Resolve a preimage's bytes via the host's lookup subscription, or time out. */
+function lookupPreimageBytes(preimage: PreimageManager, key: `0x${string}`): Promise<Uint8Array> {
+  return new Promise<Uint8Array>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      sub?.unsubscribe?.();
+      reject(new Error("Bulletin read timed out"));
+    }, PREIMAGE_LOOKUP_TIMEOUT_MS);
+    const sub = preimage.lookup(key, (data) => {
+      if (settled) return;
+      // lookup is a subscription: while the preimage isn't available it may
+      // fire with empty/undefined data. Ignore those and keep waiting (a
+      // later callback delivers the bytes), else we'd resolve null and the
+      // caller would decrypt garbage. Genuine misses fall through to timeout.
+      const bytes = data as Uint8Array | null | undefined;
+      if (!bytes || bytes.length === 0) return;
+      settled = true;
+      clearTimeout(timer);
+      sub?.unsubscribe?.();
+      resolve(bytes);
+    });
+  });
+}
 
 export async function createRealBridge(): Promise<HostBridge> {
   // Loaded in init(); getBridge() awaits init() before returning.
   let host!: HostMod;
   let accountsProvider: Awaited<ReturnType<HostMod["getAccountsProvider"]>> = null;
   let productAccount: ProductAccount | null = null;
-  let csMod: typeof import("@parity/product-sdk-cloud-storage") | null = null;
-  let preimage: Awaited<ReturnType<HostMod["getPreimageManager"]>> = null;
+  let preimage: PreimageManager | null = null;
   let cloudClient: CloudStorageClientT | null = null;
+  let bulletinInitError: unknown = null;
   let ssc: import("@parity/product-sdk-statement-store").StatementStoreClient | null = null;
   let ChannelStoreCtor: typeof ChannelStoreT | null = null;
   const channels = new Map<string, ChannelLike>();
   let shareRoomReady = false; // registerRoom is idempotent; only call it once.
+  // The host binds the product account to the domain it loaded us from.
+  const dotNsIdentifier = currentDotNsIdentifier();
 
   function accountId(): [string, number] {
     return [
-      productAccount?.dotNsIdentifier ?? DOTNS_IDENTIFIER,
+      productAccount?.dotNsIdentifier ?? dotNsIdentifier,
       productAccount?.derivationIndex ?? PRODUCT_DERIVATION_INDEX,
     ];
+  }
+
+  /** Ask the host for one RFC-0010 allowance; null when the call itself failed.
+   *  Only ever called from a write's failure path (see lib/allowance.ts). */
+  async function requestAllowance(resource: AllocatableResource): Promise<AllowanceOutcome | null> {
+    const result = await host.requestResourceAllocation([resource]);
+    if (!result.ok) {
+      console.warn(`[AnyTub3] ${resource.tag} request failed:`, host.formatHostError(result.error));
+      return null;
+    }
+    return result.value[0] ?? null;
+  }
+
+  /** Resolve (and cache) the sponsored preimage manager. Retried on every call:
+   *  a transient failure at init must not condemn Bulletin for the session. */
+  async function ensurePreimage(): Promise<PreimageManager | null> {
+    if (preimage) return preimage;
+    try {
+      preimage = await host.getPreimageManager();
+      if (preimage) bulletinInitError = null;
+    } catch (e) {
+      bulletinInitError = e;
+      console.warn("[AnyTub3] getPreimageManager:", e);
+    }
+    return preimage;
+  }
+
+  /** Fallback for hosts without a preimage manager: a direct Bulletin client.
+   *  Loaded lazily — the cloud-storage package drags polkadot-api plus ~2MB of
+   *  chain-metadata chunks, and that load failing must never take down the
+   *  sponsored path (it used to: both lived in one try). Retried per call. */
+  async function ensureCloudClient(): Promise<CloudStorageClientT | null> {
+    if (cloudClient) return cloudClient;
+    try {
+      const csMod = await import("@parity/product-sdk-cloud-storage");
+      const signer = csMod.createLazySigner(
+        () =>
+          accountsProvider && productAccount
+            ? accountsProvider.getProductAccountSigner(productAccount)
+            : null,
+        "AnyTub3: no product account available",
+      );
+      cloudClient = await csMod.CloudStorageClient.create({ environment: CLOUD_ENVIRONMENT, signer });
+      bulletinInitError = null;
+    } catch (e) {
+      bulletinInitError = e;
+      console.warn("[AnyTub3] CloudStorageClient init:", e);
+    }
+    return cloudClient;
+  }
+
+  /** Both Bulletin paths failed — say WHY, not just that they did. */
+  function bulletinUnavailable(operation: string): Error {
+    const cause = bulletinInitError
+      ? ` — ${errorMessage(bulletinInitError)}`
+      : " (host exposes no preimage manager and no direct client could connect)";
+    return new Error(`Bulletin ${operation} unavailable${cause}`);
   }
 
   type ChatManager = NonNullable<Awaited<ReturnType<HostMod["getChatManager"]>>>;
@@ -58,6 +236,19 @@ export async function createRealBridge(): Promise<HostBridge> {
     async init() {
       host = await import("@parity/product-sdk-host");
 
+      // 0. Gate on the transport, then on the protocol. Both throw a
+      //    HostBridgeError: getBridge() surfaces it as a blocking screen with
+      //    Retry — never a silent mock fallback inside a host.
+      if (!(await waitForHostConnection(host))) {
+        throw new HostBridgeError("The Polkadot host did not connect within 15 seconds.", {
+          hint: "Close and reopen AnyTub3 from the host, then retry.",
+          details: describeHostTransport(),
+        });
+      }
+      const truApi = await host.getTruApi();
+      if (!truApi) throw new HostBridgeError("The Polkadot host transport is unavailable.");
+      await negotiateProtocol(host, truApi);
+
       // 1. Accounts: ensure the host session is connected, resolve the product account.
       accountsProvider = await host.getAccountsProvider();
       if (accountsProvider) {
@@ -66,44 +257,31 @@ export async function createRealBridge(): Promise<HostBridge> {
           (e) => console.warn("[AnyTub3] login error:", e),
         );
         productAccount = await accountsProvider
-          .getProductAccount(DOTNS_IDENTIFIER, PRODUCT_DERIVATION_INDEX)
+          .getProductAccount(dotNsIdentifier, PRODUCT_DERIVATION_INDEX)
           .match(
             (acc) => acc as ProductAccount,
             (e) => {
-              // In dev the app loads as localhost:<port>, not anytub3.dot, so the
-              // host may reject the product-account domain — chain writes then fail.
-              console.warn("[AnyTub3] getProductAccount failed (domain?):", e);
+              // In dev the app loads as localhost:<port>, not a dotNS name, so
+              // the host rejects the domain — only the direct-client fallback
+              // (which needs a signer) is affected; sponsored paths still work.
+              console.warn(`[AnyTub3] getProductAccount(${dotNsIdentifier}) failed:`, e);
               return null;
             },
           );
       }
 
       // 2. Bulletin storage. Prefer the host preimage manager — it submits on
-      //    our behalf, sponsored via the granted BulletinAllowance (no direct
-      //    Bulletin RPC connection or product signer required). Fall back to a
-      //    direct CloudStorageClient only if the host doesn't expose one.
-      try {
-        csMod = await import("@parity/product-sdk-cloud-storage");
-        preimage = await host.getPreimageManager();
-        if (!preimage) {
-          const signer = csMod.createLazySigner(
-            () =>
-              accountsProvider && productAccount
-                ? accountsProvider.getProductAccountSigner(productAccount)
-                : null,
-            "AnyTub3: no product account available",
-          );
-          cloudClient = await csMod.CloudStorageClient.create({ environment: CLOUD_ENVIRONMENT, signer });
-        }
-      } catch (e) {
-        console.warn("[AnyTub3] Bulletin storage init:", e);
-      }
+      //    our behalf, sponsored via the implicit BulletinAllowance (no direct
+      //    Bulletin RPC connection or product signer required). The direct
+      //    CloudStorageClient fallback is resolved lazily at first use, so its
+      //    heavyweight chunk graph can never gate the sponsored path.
+      await ensurePreimage();
 
       // 3. Statement Store, connected in sponsored host mode (no per-update signing).
       try {
         const ss = await import("@parity/product-sdk-statement-store");
         ChannelStoreCtor = ss.ChannelStore;
-        ssc = new ss.StatementStoreClient({ appName: APP_NAME, defaultTtlSeconds: 120 });
+        ssc = new ss.StatementStoreClient({ appName: APP_NAME, defaultTtlSeconds: STATEMENT_TTL_SECONDS });
         await ssc.connect({ mode: "host", accountId: accountId() });
       } catch (e) {
         console.warn("[AnyTub3] Statement Store unavailable:", e);
@@ -135,38 +313,30 @@ export async function createRealBridge(): Promise<HostBridge> {
     },
 
     async deriveEntropy(context: Uint8Array) {
-      return host.deriveEntropy(context);
-    },
-
-    async preallocate() {
-      try {
-        const outcomes = await host.requestResourceAllocation([
-          host.enumValue("BulletinAllowance", undefined),
-          host.enumValue("StatementStoreAllowance", undefined),
-        ]);
-        // Outcome tags: "Allocated" | "Rejected" | "NotAvailable".
-        const granted = outcomes.every((o) => o.tag !== "Rejected");
-        console.info("[AnyTub3] allowances:", outcomes.map((o) => o.tag).join(", "));
-        return granted;
-      } catch (e) {
-        console.warn("[AnyTub3] preallocate:", e);
-        return false;
-      }
+      const result = await host.deriveEntropy(context);
+      if (!result.ok) throw new Error(`deriveEntropy: ${host.formatHostError(result.error)}`);
+      return result.value;
     },
 
     async cloudStore(bytes: Uint8Array) {
       // Sponsored host path: submit → preimage key → CID (interoperable pointer).
-      if (preimage && csMod) {
-        const key = (await preimage.submit(bytes)) as `0x${string}`;
-        return csMod.hashToCid(key);
+      // A lapsed BulletinAllowance is re-requested once, on failure only.
+      const pm = await ensurePreimage();
+      if (pm) {
+        const key = await withAllowanceRetry(
+          () => pm.submit(bytes),
+          () => requestAllowance({ tag: "BulletinAllowance", value: undefined }),
+        );
+        return hashToCid(key);
       }
-      if (cloudClient) {
-        const result = await cloudClient.store(bytes).send();
+      const client = await ensureCloudClient();
+      if (client) {
+        const result = await client.store(bytes).send();
         const cid = result.cid?.toString();
         if (!cid) throw new Error("Cloud Storage: missing CID in receipt");
         return cid;
       }
-      throw new Error("Bulletin storage unavailable (preimage manager missing)");
+      throw bulletinUnavailable("save");
     },
 
     async cloudFetch(cid: string) {
@@ -175,33 +345,30 @@ export async function createRealBridge(): Promise<HostBridge> {
       if (cid.startsWith("bafymock")) {
         throw new Error("This share code was created in demo mode and can't be opened inside the host.");
       }
-      if (preimage && csMod) {
-        const key = csMod.cidToPreimageKey(cid);
-        return await new Promise<Uint8Array>((resolve, reject) => {
-          let settled = false;
-          const timer = setTimeout(() => {
-            if (settled) return;
-            settled = true;
-            sub?.unsubscribe?.();
-            reject(new Error("Bulletin read timed out"));
-          }, 30_000);
-          const sub = preimage!.lookup(key, (data) => {
-            if (settled) return;
-            // lookup is a subscription: while the preimage isn't available it may
-            // fire with empty/undefined data. Ignore those and keep waiting (a
-            // later callback delivers the bytes), else we'd resolve null and the
-            // caller would decrypt garbage. Genuine misses fall through to timeout.
-            const bytes = data as Uint8Array | null | undefined;
-            if (!bytes || bytes.length === 0) return;
-            settled = true;
-            clearTimeout(timer);
-            sub?.unsubscribe?.();
-            resolve(bytes);
-          });
-        });
+      const pm = await ensurePreimage();
+      if (pm) {
+        return lookupPreimageBytes(pm, cidToPreimageKey(cid));
       }
-      if (cloudClient) return cloudClient.fetchBytes(cid);
-      throw new Error("Bulletin read unavailable (preimage manager missing)");
+      const client = await ensureCloudClient();
+      if (client) {
+        const result = await client.fetchBytes(cid);
+        if (!result.ok) throw result.error;
+        return result.value;
+      }
+      throw bulletinUnavailable("read");
+    },
+
+    // In-host, these fetches are subject to the host's external-access
+    // permission (the user may be prompted), like the external streams. The
+    // http(s)-only scheme check lives in the shared helpers.
+    async httpGet(url: string) {
+      return fetchText(url);
+    },
+    async httpGetBytes(url: string) {
+      return fetchBytes(url);
+    },
+    async httpGetPrefix(url: string, opts) {
+      return fetchTextPrefix(url, opts);
     },
 
     channel(topic2: string): ChannelLike {
@@ -211,7 +378,16 @@ export async function createRealBridge(): Promise<HostBridge> {
       const store: ChannelStoreT<ChannelEnvelope> = new ChannelStoreCtor<ChannelEnvelope>(ssc, { topic2 });
       ch = {
         async write(channelName, value) {
-          await store.write(channelName, value);
+          // ChannelStore.write returns a Result and never throws (SDK ≥0.6) —
+          // a rejected statement must surface to the caller, not vanish. A
+          // lapsed StatementStoreAllowance is re-requested once, on failure.
+          await withAllowanceRetry(
+            async () => {
+              const result = await store.write(channelName, value);
+              if (!result.ok) throw result.error;
+            },
+            () => requestAllowance({ tag: "StatementStoreAllowance", value: undefined }),
+          );
         },
         read(channelName) {
           return store.read(channelName);
@@ -245,7 +421,10 @@ export async function createRealBridge(): Promise<HostBridge> {
       const chat = await host.getChatManager();
       if (!chat) throw new Error("Chat unavailable");
       await ensureShareRoom(chat);
-      await chat.sendMessage(SHARE_ROOM.roomId, { tag: "Custom", value: { messageType, payload } });
+      await chat.sendMessage(SHARE_ROOM.roomId, {
+        tag: "Custom",
+        value: { messageType, payload: host.toHex(payload) },
+      });
     },
 
     subscribeCustom(messageType: string, cb) {
@@ -263,7 +442,7 @@ export async function createRealBridge(): Promise<HostBridge> {
           if (p.tag !== "MessagePosted") return;
           const content = p.value; // ChatMessageContent
           if (content.tag === "Custom" && content.value.messageType === messageType) {
-            cb(content.value.payload, action.peer);
+            cb(host.fromHex(content.value.payload), action.peer);
           }
         });
       })();

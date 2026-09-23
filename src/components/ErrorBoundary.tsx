@@ -1,6 +1,6 @@
 import { Component, type ReactNode } from "react";
-import { Button } from "@novasamatech/tr-ui";
 import { RotateCcw } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 type Props = { children: ReactNode; onReset: () => void };
 type State = { error: Error | null };
@@ -31,10 +31,10 @@ export class ErrorBoundary extends Component<Props, State> {
     if (!this.state.error) return this.props.children;
     return (
       <div className="flex flex-col items-center gap-3 py-16 text-center">
-        <p className="text-fg-primary font-medium">Playback ran into a problem.</p>
-        <p className="text-fg-secondary max-w-md text-sm break-words">{this.state.error.message}</p>
-        <Button onClick={this.reset}>
-          <RotateCcw /> Back to library
+        <p className="text-label-l text-fg-primary">Something went wrong on this screen.</p>
+        <p className="text-body-s text-fg-secondary max-w-md break-words">{this.state.error.message}</p>
+        <Button className="hover:bg-action-primary-hover" onClick={this.reset}>
+          <RotateCcw aria-hidden /> Back to library
         </Button>
       </div>
     );

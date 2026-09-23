@@ -1,16 +1,18 @@
-import { aesGcmEncryptPacked, aesGcmDecryptPacked } from "@parity/product-sdk-crypto";
+import { aesGcmEncryptPacked, aesGcmDecryptPacked } from "@/lib/aes";
 import { getBridge } from "@/lib/bridge";
+import { utf8 } from "@/lib/bytes";
 import { symKey } from "@/lib/keys";
 import { sanitizeEntries } from "@/lib/m3u";
 import { KEY_CTX } from "@/lib/config";
+import { sanitizePlaylistEpg } from "@/lib/epg-playlist";
+import { isHttpUrl } from "@/lib/url";
 import type { LibraryIndex, Playlist, PlaylistBody } from "@/types";
 
 const LIBRARY_INDEX_CTX = "anytub3/library-index/v1";
-const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 function encryptJson(obj: unknown, key: Uint8Array): Uint8Array {
-  return aesGcmEncryptPacked(encoder.encode(JSON.stringify(obj)), key);
+  return aesGcmEncryptPacked(utf8(JSON.stringify(obj)), key);
 }
 function decryptJson<T>(blob: Uint8Array, key: Uint8Array): T {
   return JSON.parse(decoder.decode(aesGcmDecryptPacked(blob, key))) as T;
@@ -38,6 +40,10 @@ export async function storePlaylist(playlist: Playlist): Promise<{ cid: string; 
     id: playlist.id,
     title: playlist.title,
     entries: playlist.entries,
+    // Persist the guide configuration + origin so they survive a cold restore
+    // and follow the playlist across hosts.
+    ...(isHttpUrl(playlist.sourceUrl) ? { sourceUrl: playlist.sourceUrl } : {}),
+    ...(playlist.epg ? { epg: playlist.epg } : {}),
   };
   const bridge = await getBridge();
   const cid = await bridge.cloudStore(encryptJson(body, key));
@@ -62,6 +68,20 @@ export async function loadPlaylist(cid: string, key: Uint8Array): Promise<Playli
     id: typeof body.id === "string" ? body.id : "",
     title: typeof body.title === "string" ? body.title : "",
     entries: sanitizeEntries(body.entries),
+    ...playlistEpgFields(body),
+  };
+}
+
+/**
+ * The guide-related fields of a decrypted body, re-validated (http(s) origin,
+ * sanitized guide configuration, legacy single `epgUrl` folded into
+ * `epg.sources`) — the one spread every body → Playlist conversion uses.
+ */
+export function playlistEpgFields(body: PlaylistBody): Pick<Playlist, "sourceUrl" | "epg"> {
+  const epg = sanitizePlaylistEpg(body.epg, body.epgUrl);
+  return {
+    ...(isHttpUrl(body.sourceUrl) ? { sourceUrl: body.sourceUrl } : {}),
+    ...(epg ? { epg } : {}),
   };
 }
 
@@ -86,10 +106,7 @@ export async function loadLibraryIndex(cid: string): Promise<LibraryIndex> {
 }
 
 /** Build a library index from the in-memory playlists (only persisted ones). */
-export function buildLibraryIndex(
-  playlists: Playlist[],
-  lastPlayed?: LibraryIndex["lastPlayed"],
-): LibraryIndex {
+export function buildLibraryIndex(playlists: Playlist[]): LibraryIndex {
   return {
     v: 1,
     playlists: playlists
@@ -98,10 +115,9 @@ export function buildLibraryIndex(
         id: p.id,
         cid: p.cid!,
         title: p.title,
-        channelCount: p.entries?.length ?? 0,
+        channelCount: p.entries.length,
         addedAt: p.addedAt,
         ...(p.sourceCid ? { sourceCid: p.sourceCid } : {}),
       })),
-    lastPlayed,
   };
 }

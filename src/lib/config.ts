@@ -1,5 +1,7 @@
-// App identity (design doc 2 §0).
-export const DOTNS_IDENTIFIER = "anytub3.dot";
+// App identity (design doc 2 §0). MUST match the DotNS name the app is
+// deployed under — the host binds the product account to the LOADED domain and
+// rejects a mismatched identifier (in dev/localhost it is rejected anyway).
+export const DOTNS_IDENTIFIER = "anytub3tv.paseo";
 export const APP_NAME = "anytub3";
 export const PRODUCT_DERIVATION_INDEX = 0;
 
@@ -13,6 +15,9 @@ export const KEY_CTX = {
   npEnc: "anytub3/np-enc/v1",
   libChannel: "anytub3/lib-channel/v1",
   libEnc: "anytub3/lib-enc/v1",
+  // FROZEN: this domain doesn't follow the `anytub3/<name>/v1` convention, but
+  // changing it would re-derive every playlist content key and orphan all blobs
+  // already stored on Bulletin. Do not align it.
   playlist: (id: string) => `playlist:${id}`,
 } as const;
 
@@ -33,5 +38,11 @@ export const SHARE_ROOM = { roomId: "anytub3-shares", name: "AnyTub3", icon: "" 
 // Heartbeats (design §8): now-playing refresh ~15s; library-head longer.
 export const NP_HEARTBEAT_MS = 15_000;
 export const LIB_HEARTBEAT_MS = 60_000;
-export const NP_TTL_SECONDS = 120;
-export const LIB_TTL_SECONDS = 600;
+// Statement TTL. The SDK's ChannelStore only supports ONE client-wide TTL (no
+// per-write override), so both channels share it. It must be LONG: the
+// library-head statement is the only cross-launch resume pointer when the
+// webview's per-device cache doesn't survive (host-dependent) — a short TTL
+// (the old 120s) made the library unrecoverable minutes after closing the app.
+// Staleness is not TTL's job here: both channels are LWW on a Lamport
+// timestamp, so a lingering old statement always loses to any newer write.
+export const STATEMENT_TTL_SECONDS = 7 * 24 * 3_600;
