@@ -1,6 +1,8 @@
+import { useEffect, useRef } from "react";
 import { Tv } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { Channel } from "@/types";
+import { revealInScrollParent } from "@/lib/scroll";
 import { EpgButton } from "@/components/EpgPanel";
 
 type ChannelRowProps = {
@@ -16,11 +18,19 @@ type ChannelRowProps = {
  * tune button (D-pad focusable, `data-focus-key` for TV focus memory) with the
  * guide button BESIDE it — never nested — so opening the EPG can't also zap.
  * The whole row is the hover target; it must sit on a container surface (the
- * selection tokens resolve to the page colour on a bare page).
+ * selection tokens resolve to the page colour on a bare page). The active row
+ * brings itself into view when it mounts or becomes active, so a list that
+ * remounts (back from the guide, a zap, a handoff) lands on the playing channel.
  */
 export function ChannelRow({ channel, active = false, onTune, onGuide }: ChannelRowProps) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (active && rowRef.current) revealInScrollParent(rowRef.current);
+  }, [active]);
+
   return (
     <div
+      ref={rowRef}
       className={`flex items-center gap-1 rounded-small pr-1 transition-colors ${
         active
           ? "bg-selection-container-active"
