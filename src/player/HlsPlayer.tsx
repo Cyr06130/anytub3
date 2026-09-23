@@ -1,4 +1,5 @@
 import Hls from "hls.js";
+import { describeStreamFailure } from "@/player/stream-errors";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Maximize, Minimize } from "lucide-react";
 import { errorMessage } from "@/lib/errors";
@@ -88,8 +89,8 @@ async function requestFullscreenOn(node: FsEl | VideoEl | null): Promise<boolean
  * the live edge rather than seeking to an offset (design §8). Native HLS
  * (Safari/iOS) is used directly when available.
  *
- * CORS: many IPTV streams require a permissive proxy / headers — surfaced via
- * onError so the UI can tell the user (design R4).
+ * A stream the browser cannot load (geo-blocked, CORS-less CDN, offline) is
+ * surfaced through onError with user-facing wording (stream-errors.ts, design R4).
  */
 export function HlsPlayer({
   src,
@@ -173,7 +174,7 @@ export function HlsPlayer({
             switch (data.type) {
               case Hls.ErrorTypes.NETWORK_ERROR:
                 if (networkRetries++ < MAX_RECOVERY_ATTEMPTS) hls?.startLoad();
-                else giveUp("Stream unreachable (network / CORS / permission). A proxy may be required.");
+                else giveUp(describeStreamFailure(data));
                 break;
               case Hls.ErrorTypes.MEDIA_ERROR:
                 if (mediaRecoveries++ < MAX_RECOVERY_ATTEMPTS) hls?.recoverMediaError();
