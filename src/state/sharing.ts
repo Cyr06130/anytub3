@@ -1,6 +1,6 @@
 import { toastError, toastInfo, toastSuccess } from "@/lib/toast";
 import type { Playlist, SharePointer } from "@/types";
-import { loadPlaylist, storePlaylist } from "@/lib/bulletin";
+import { loadPlaylist, playlistEpgFields, storePlaylist } from "@/lib/bulletin";
 import { KEY_CTX } from "@/lib/config";
 import { errorMessage } from "@/lib/errors";
 import { symKey } from "@/lib/keys";
@@ -77,7 +77,7 @@ export async function importSharedPointer(ptr: SharePointer): Promise<boolean> {
       title: ptr.title || body.title,
       entries: body.entries,
       sourceCid: ptr.playlistCid,
-      ...(body.epgUrl ? { epgUrl: body.epgUrl } : {}),
+      ...playlistEpgFields(body),
       addedAt: Date.now(),
     };
     // …then re-store it under OUR OWN content key. The shared blob is encrypted

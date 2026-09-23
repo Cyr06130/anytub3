@@ -52,6 +52,14 @@ export interface HostBridge {
    * fixtures for e2e. http(s) only; rejects other schemes.
    */
   httpGet(url: string): Promise<string>;
+  /** As {@link httpGet}, raw bytes — for gzip-compressed (`.xml.gz`) guides. */
+  httpGetBytes(url: string): Promise<Uint8Array>;
+  /**
+   * Stream a text resource and stop at the first `until` marker (or after
+   * `maxBytes`), cancelling the download — reads a country guide's <channel>
+   * directory without pulling the whole multi-MB file.
+   */
+  httpGetPrefix(url: string, opts: { until: string; maxBytes: number }): Promise<string>;
 
   // ── Statement Store channels (ephemeral, last-write-wins) ──
   channel(topic2: string): ChannelLike;

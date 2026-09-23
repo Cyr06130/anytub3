@@ -14,6 +14,8 @@ export type Channel = {
   group?: string;
   /** tvg-id, when present. */
   tvgId?: string;
+  /** tvg-country (ISO 3166-1 alpha-2, upper-case), when present. */
+  country?: string;
 };
 
 /** A playlist as held in app state and serialized to the Bulletin body. */
@@ -30,12 +32,38 @@ export type Playlist = {
    */
   sourceCid?: string;
   /**
-   * XMLTV EPG source for this playlist (the `url-tvg`/`x-tvg-url` from the m3u
-   * header, or user-supplied). Fetched lazily, only when the user opens a
-   * channel's guide. http(s) only. See lib/epg.ts.
+   * http(s) URL the playlist was imported from, when known. Lets the guide
+   * resolver derive the provider's own APIs (Xtream Codes). Carries the same
+   * credentials as the stream URLs themselves — no new exposure.
    */
-  epgUrl?: string;
+  sourceUrl?: string;
+  /** Programme-guide configuration — resolved lazily, only when the user opens
+   *  a channel's guide (lib/epg-resolve.ts, sources in lib/epg-sources.ts). */
+  epg?: PlaylistEpg;
   addedAt: number;
+};
+
+/** Where a channel's programmes are read from: the join between a playlist
+ *  entry and a channel id inside an external guide. */
+export type EpgBinding = {
+  /** A source id from lib/epg-sources.ts, or an XMLTV URL. */
+  source: string;
+  /** Channel id inside that source. */
+  channelId: string;
+  /** Channel name inside that source (provenance line). */
+  name?: string;
+};
+
+export type PlaylistEpg = {
+  /**
+   * XMLTV guide URLs in priority order: the `url-tvg`/`x-tvg-url` list from
+   * the m3u header, plus any URL the user pasted. http(s) only.
+   */
+  sources?: string[];
+  /** User-confirmed guide channel per entry id. Automatic matches are NOT
+   *  stored here (they live in the per-device cache and are recomputable) so a
+   *  guide lookup never rewrites the Bulletin body. */
+  bindings?: Record<string, EpgBinding>;
 };
 
 /** Serialized playlist body stored (encrypted) on Bulletin. */
@@ -44,8 +72,11 @@ export type PlaylistBody = {
   id: string;
   title: string;
   entries: Channel[];
-  /** Persisted EPG source so it survives a cold restore / cross-host sync. */
+  /** @deprecated Bodies written before 2026-09 carry a single XMLTV URL here.
+   *  Read as `epg.sources[0]`, never written again. */
   epgUrl?: string;
+  sourceUrl?: string;
+  epg?: PlaylistEpg;
 };
 
 /** Library index — the mutable head pointer lives in `library-head` (Statement Store). */
@@ -93,11 +124,11 @@ export type SharePointer = {
 };
 
 // ── EPG (Electronic Program Guide) ───────────────────────────────────────────
-// Modeled on the iptv-org data model: the channel `id` (== Channel.tvgId ==
-// XMLTV `<channel id>`) is the join key. iptv-org/api gives the channel
-// directory + guide pointers (metadata only); the actual programmes come from an
-// XMLTV feed (the playlist's `url-tvg`). All external EPG data is untrusted and
-// sanitized before it reaches state (lib/epg.ts), exactly like shared playlists.
+// Programmes come from one of the configured sources (lib/epg-sources.ts): the
+// provider's Xtream API, an XMLTV feed declared by the playlist (joined on
+// tvg-id == `<channel id>`), or a public directory joined by channel name. All
+// external EPG data is untrusted and sanitized before it reaches state
+// (lib/epg-xmltv.ts), exactly like shared playlists.
 
 /** One programme — an XMLTV `<programme>` element, sanitized. */
 export type Programme = {
@@ -117,6 +148,7 @@ export type Programme = {
 
 /** A single channel's guide, computed on demand for the EPG panel. */
 export type ChannelEpg = {
+  /** Channel id inside the source the programmes came from. */
   channelId: string;
   /** Programme airing at the reference time, if any. */
   now?: Programme;
@@ -124,19 +156,16 @@ export type ChannelEpg = {
   next?: Programme;
   /** `now` + upcoming programmes, sorted by start, capped. */
   upcoming: Programme[];
-  /** XMLTV source the programmes were read from. */
+  /** Source id (lib/epg-sources.ts) or XMLTV URL the programmes were read from. */
   source: string;
-  /** Optional enrichment resolved from the iptv-org channel directory. */
-  meta?: { name?: string; logo?: string; categories?: string[] };
+  /** Human label of that source, for the provenance line. */
+  sourceLabel: string;
+  /** The channel's name inside the source, when the source has one. */
+  sourceChannelName?: string;
 };
 
-/** iptv-org `channels.json` entry (subset we use to resolve/enrich a channel). */
-export type DirectoryChannel = {
+/** One channel of a public guide directory (lib/epg-guide-directory.ts). */
+export type GuideChannel = {
   id: string;
   name: string;
-  alt_names?: string[];
-  country?: string;
-  categories?: string[];
-  /** Closed channels are skipped when resolving a missing tvg-id. */
-  closed?: string | null;
 };

@@ -7,8 +7,8 @@ import { CLOUD_ENVIRONMENT, APP_NAME, PRODUCT_DERIVATION_INDEX, SHARE_ROOM, STAT
 import { currentDotNsIdentifier } from "@/lib/dotns";
 import { errorMessage } from "@/lib/errors";
 import { describeHostTransport } from "./diagnostics";
-import { isHttpUrl } from "@/lib/url";
 import { HostBridgeError } from "./errors";
+import { fetchBytes, fetchText, fetchTextPrefix } from "./http";
 import type { ChannelEnvelope, ChannelLike, HostBridge } from "./types";
 
 // ── Real host bridge ─────────────────────────────────────────────────────────
@@ -358,15 +358,17 @@ export async function createRealBridge(): Promise<HostBridge> {
       throw bulletinUnavailable("read");
     },
 
+    // In-host, these fetches are subject to the host's external-access
+    // permission (the user may be prompted), like the external streams. The
+    // http(s)-only scheme check lives in the shared helpers.
     async httpGet(url: string) {
-      // Enforce the scheme here too (not just in callers): never fetch
-      // javascript:/file:/data: URLs. In-host, this fetch is subject to the
-      // host's external-access permission (the user may be prompted), like the
-      // external streams.
-      if (!isHttpUrl(url)) throw new Error("Only http(s) URLs are supported.");
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.text();
+      return fetchText(url);
+    },
+    async httpGetBytes(url: string) {
+      return fetchBytes(url);
+    },
+    async httpGetPrefix(url: string, opts) {
+      return fetchTextPrefix(url, opts);
     },
 
     channel(topic2: string): ChannelLike {

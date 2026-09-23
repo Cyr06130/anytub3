@@ -95,6 +95,30 @@ this keyboard-only.
 
 ---
 
+## Programme guide (EPG)
+
+Opening a channel's guide (the calendar icon) runs a **guide resolver** that walks the
+sources configured in `src/lib/epg-sources.ts`, in order, until one has programmes for
+that channel. Nothing is fetched before the click, and only that channel's programmes are
+kept (per-device cache, 6 h).
+
+| Source | Join | What is fetched |
+|---|---|---|
+| Provider (Xtream Codes) — when the playlist was imported from `…/get.php?username=…` | stream id from the stream URL | `player_api.php?action=get_short_epg` (a few KB) |
+| Playlist guide(s) — every `url-tvg` / `x-tvg-url` of the m3u header, plus pasted URLs | `tvg-id` (feed suffix `@SD` ignored), else channel name | the XMLTV file once; the playlist's other channels are extracted from the same download |
+| Public directory (epg.pw) | channel name, within the channel's country | the country file's `<channel>` header only (streamed, cancelled at the first `<programme>`), then one per-channel XMLTV |
+
+The channel's country comes from its `tvg-id` suffix (`TF1.fr`), `tvg-country`, a provider
+prefix (`FR| TF1`), else the device locale. When nothing matches, the panel offers to **pick
+the channel in the directory** (any platform) or to **paste an XMLTV URL** (not on TV); both
+are saved to the playlist and follow it across hosts. A picked channel wins over the
+automatic cascade from then on. Misses are remembered for 30 minutes so zapping never
+re-downloads a directory.
+
+To add, remove or reorder sources, edit `EPG_SOURCES` in `src/lib/epg-sources.ts` — a public
+aggregator must send `Access-Control-Allow-Origin: *` (the app fetches from a browser/
+webview). `epg-sources.test.ts` validates the shape of that list.
+
 ## Architecture
 
 The application code **never** depends directly on the host SDK: everything goes through

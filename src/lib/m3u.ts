@@ -1,4 +1,5 @@
 import type { Channel } from "@/types";
+import { countryCode } from "@/lib/country";
 import { isHttpUrl } from "@/lib/url";
 import { djb2 } from "@/lib/hash";
 
@@ -69,6 +70,7 @@ export function parseM3U(text: string): Channel[] {
       logo: isHttpUrl(rawLogo) ? rawLogo : undefined, // http(s) logos only
       group: attr(meta, "group-title"),
       tvgId,
+      country: countryCode(attr(meta, "tvg-country")),
     });
   }
   return out;
@@ -102,34 +104,37 @@ export function sanitizeEntries(raw: unknown): Channel[] {
       logo: isHttpUrl(c.logo) ? c.logo : undefined,
       group: typeof c.group === "string" ? c.group : undefined,
       tvgId,
+      country: countryCode(c.country),
     });
   }
   return out;
 }
 
+const EPG_HEADER_KEYS = ["url-tvg", "x-tvg-url", "tvg-url"];
+
 /**
- * Read the EPG source URL from the `#EXTM3U` header, if present. IPTV providers
- * advertise their XMLTV guide there as `url-tvg`, `x-tvg-url` or `tvg-url` (the
- * value may be a comma-separated list — we take the first http(s) URL). This is
- * the primary, decentralized EPG source: it travels with the playlist, no
- * central dependency. Returns undefined when absent or non-http(s).
+ * Read the EPG guide URLs from the `#EXTM3U` header. IPTV providers advertise
+ * their XMLTV guide(s) there as `url-tvg`, `x-tvg-url` or `tvg-url`, each a
+ * comma-separated list (public aggregations list one file per country). Every
+ * http(s) URL is kept, in order, de-duplicated — the guide resolver tries them
+ * until one covers the channel. This is the primary, decentralized EPG source:
+ * it travels with the playlist, no central dependency.
  */
-export function parseM3UHeader(text: string): { epgUrl?: string } {
+export function parseM3UHeader(text: string): { epgUrls: string[] } {
   // The header is (conventionally) the first line; scan the first few lines to
   // tolerate leading blanks/BOM and a misplaced #EXTM3U.
-  const lines = text.split(/\r?\n/, 8);
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line.startsWith("#EXTM3U")) continue;
-    for (const key of ["url-tvg", "x-tvg-url", "tvg-url"]) {
-      const value = attr(line, key);
-      if (!value) continue;
-      const first = value.split(",").map((s) => s.trim()).find(isHttpUrl);
-      if (first) return { epgUrl: first };
+  const header = text
+    .split(/\r?\n/, 8)
+    .map((l) => l.trim())
+    .find((l) => l.startsWith("#EXTM3U"));
+  const epgUrls: string[] = [];
+  if (!header) return { epgUrls };
+  for (const key of EPG_HEADER_KEYS) {
+    for (const candidate of (attr(header, key) ?? "").split(",").map((s) => s.trim())) {
+      if (isHttpUrl(candidate) && !epgUrls.includes(candidate)) epgUrls.push(candidate);
     }
-    break; // header found; no need to scan further
   }
-  return {};
+  return { epgUrls };
 }
 
 /** Derive a human title for a parsed playlist (from source URL or fallback). */

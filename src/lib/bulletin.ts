@@ -4,6 +4,7 @@ import { utf8 } from "@/lib/bytes";
 import { symKey } from "@/lib/keys";
 import { sanitizeEntries } from "@/lib/m3u";
 import { KEY_CTX } from "@/lib/config";
+import { sanitizePlaylistEpg } from "@/lib/epg-playlist";
 import { isHttpUrl } from "@/lib/url";
 import type { LibraryIndex, Playlist, PlaylistBody } from "@/types";
 
@@ -39,8 +40,10 @@ export async function storePlaylist(playlist: Playlist): Promise<{ cid: string; 
     id: playlist.id,
     title: playlist.title,
     entries: playlist.entries,
-    // Persist the EPG source so it survives a cold restore / cross-host sync.
-    ...(isHttpUrl(playlist.epgUrl) ? { epgUrl: playlist.epgUrl } : {}),
+    // Persist the guide configuration + origin so they survive a cold restore
+    // and follow the playlist across hosts.
+    ...(isHttpUrl(playlist.sourceUrl) ? { sourceUrl: playlist.sourceUrl } : {}),
+    ...(playlist.epg ? { epg: playlist.epg } : {}),
   };
   const bridge = await getBridge();
   const cid = await bridge.cloudStore(encryptJson(body, key));
@@ -65,8 +68,20 @@ export async function loadPlaylist(cid: string, key: Uint8Array): Promise<Playli
     id: typeof body.id === "string" ? body.id : "",
     title: typeof body.title === "string" ? body.title : "",
     entries: sanitizeEntries(body.entries),
-    // EPG source is a plain http(s) URL or nothing — validate the scheme too.
-    ...(isHttpUrl(body.epgUrl) ? { epgUrl: body.epgUrl } : {}),
+    ...playlistEpgFields(body),
+  };
+}
+
+/**
+ * The guide-related fields of a decrypted body, re-validated (http(s) origin,
+ * sanitized guide configuration, legacy single `epgUrl` folded into
+ * `epg.sources`) — the one spread every body → Playlist conversion uses.
+ */
+export function playlistEpgFields(body: PlaylistBody): Pick<Playlist, "sourceUrl" | "epg"> {
+  const epg = sanitizePlaylistEpg(body.epg, body.epgUrl);
+  return {
+    ...(isHttpUrl(body.sourceUrl) ? { sourceUrl: body.sourceUrl } : {}),
+    ...(epg ? { epg } : {}),
   };
 }
 
