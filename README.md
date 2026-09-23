@@ -8,9 +8,13 @@ that runs inside the Mobile / Desktop / Web host.
 - **Inter-host continuity**: opening AnyTub3 on another device resumes the
   current channel, via an encrypted `now-playing` state published on the
   **Statement Store** (LWW), with a durable library index (`library-head`) for cold resume.
-- Playlist sharing with the host's contacts via a sealed pointer (`sealedBox`).
+- Playlist sharing through a copyable **share code** (a bearer pointer to the encrypted
+  playlist), also handed to the host chat where a host implements it.
+- A **programme guide** resolved automatically per channel — the provider's API, the
+  playlist's own XMLTV, or a public directory (see below).
+- **TV mode** for LG webOS: no modals, D-pad navigation, lean-back player overlay.
 - Player with **fullscreen**, a **side channel list** during playback,
-  **light/dark theme toggle**, and playlist **editing / deletion**.
+  **light/dark theme toggle**, and playlist **editing / deletion** (act first, Undo).
 
 Implemented from the documents in `design/` (design plan, implementation guide,
 design-system integration + deployment).
@@ -25,7 +29,8 @@ on the **Polkadot design system** (semantic tokens, Berlin Day/Night themes) wit
 `lib/bridge` facade that switches to a local bridge (`BroadcastChannel` +
 `localStorage`) — two tabs then simulate two hosts sharing a wallet.
 
-Verified (`npm run build` + `npm run test:e2e`, 6 specs green):
+Verified by `npm run typecheck`, `npm run test:unit` (166 tests, 24 files) and
+`npm run test:e2e` (36 tests, 8 specs, run against the built bundle on the mock bridge):
 
 | Flow | Verified |
 |---|---|
@@ -33,10 +38,13 @@ Verified (`npm run build` + `npm run test:e2e`, 6 specs green):
 | m3u ingestion + sanitization + Bulletin save + HLS playback | ✅ `playlist.spec.ts` (HLS manifest actually loaded) |
 | **Continuity — cold resume** (a new host restores the library + last channel) | ✅ `resume.spec.ts` |
 | **Continuity — live handoff** (switching channels on host A switches host B) | ✅ `resume.spec.ts` |
-| Outbound sharing (sealed to a contact) | ✅ `share.spec.ts` |
-| Inbound reception (unsealed + imported into the library) | ✅ `share.spec.ts` |
-| Light/dark theme toggle · fullscreen · side list | ✅ `ui.spec.ts` / `playlist.spec.ts` |
-| Editing (rename / remove channels) + deletion | ✅ `ui.spec.ts` |
+| Same-device reload restore · restore despite a statement outage at save time | ✅ `resume.spec.ts` |
+| **Cross-host library sync** (add / import / edit / delete propagate; a lagging heartbeat never rolls back) | ✅ `sync.spec.ts` |
+| Sharing: share code out · import into an empty / non-empty library · hostile import re-sanitized · chat pointer in | ✅ `share.spec.ts` |
+| Light/dark theme toggle · fullscreen fallback · side list | ✅ `ui.spec.ts` / `playlist.spec.ts` |
+| Editing (rename / remove channels) · deletion with Undo | ✅ `ui.spec.ts` |
+| **TV mode**: keyboard-only journey, Back key variants, no Bulletin write per zap | ✅ `tv.spec.ts` |
+| **Programme guide**: declared XMLTV · epg.pw auto-match · directory pick persisted · Xtream provider · TV variant | ✅ `epg.spec.ts` |
 
 ---
 
@@ -45,8 +53,9 @@ Verified (`npm run build` + `npm run test:e2e`, 6 specs green):
 ```bash
 npm install
 npm run dev          # http://localhost:5173 — off-host demo mode ("Demo mode" badge)
-npm run build        # static bundle → ./build  (output expected by `dot deploy`)
-npm run test:e2e     # Playwright (build + preview + 6 specs)
+npm run build        # static bundle → ./build  (what bulletin-deploy publishes)
+npm run test:unit    # Vitest — parsers, crypto oracles, bridge, EPG resolver
+npm run test:e2e     # Playwright (build + preview + 8 specs, mock bridge)
 npm run typecheck    # tsc -b --noEmit
 ```
 
@@ -117,7 +126,10 @@ re-downloads a directory.
 
 To add, remove or reorder sources, edit `EPG_SOURCES` in `src/lib/epg-sources.ts` — a public
 aggregator must send `Access-Control-Allow-Origin: *` (the app fetches from a browser/
-webview). `epg-sources.test.ts` validates the shape of that list.
+webview). `epg-sources.test.ts` validates the shape of that list; `e2e/epg.spec.ts` drives the
+declared, directory, picker, Xtream and TV paths through the mock bridge's URL fixtures.
+
+---
 
 ## Architecture
 
@@ -129,34 +141,47 @@ everywhere); the bridge only provides the primitives owned by the host.
 src/
 ├─ lib/
 │  ├─ bridge/
-│  │  ├─ types.ts      # HostBridge interface (the only host coupling point)
-│  │  ├─ real.ts       # Parity SDK (dynamically imported → 0 chain deps off-host)
-│  │  ├─ mock.ts       # BroadcastChannel + localStorage (demo/dev/e2e)
-│  │  ├─ index.ts      # getBridge(): detects the host, picks the impl (no mock fallback in-host)
-│  │  ├─ errors.ts     # HostBridgeError → blocking "Can't reach the Polkadot host" screen
-│  │  └─ diagnostics.ts # which host transport this page got (shared client / port / iframe)
-│  ├─ config.ts        # .dot identity, key domains, topics, heartbeats
-│  ├─ dotns.ts         # dotNS identifier from the loaded hostname (Web gateway `.li` stripped)
-│  ├─ allowance.ts     # re-request a lapsed RFC-0010 allowance once, on write failure only
-│  ├─ keys.ts          # deriveEntropy → HKDF-SHA256 content keys (byte-compatible with KeyManager)
-│  ├─ bulletin.ts      # encrypted store/fetch + library index (CID)
-│  ├─ sync.ts          # continuity: now-playing + library-head channels (LWW)
-│  ├─ share.ts         # sealedBox + chat (contacts)
-│  ├─ m3u.ts           # parse + sanitization (XSS, design R3)
-│  └─ sample.ts        # demo playlist (test HLS streams)
+│  │  ├─ types.ts        # HostBridge interface (the only host coupling point)
+│  │  ├─ real.ts         # Parity SDK (dynamically imported → 0 chain deps off-host)
+│  │  ├─ mock.ts         # BroadcastChannel + localStorage + URL fixtures (demo/dev/e2e)
+│  │  ├─ http.ts         # http(s)-only fetch helpers, incl. the streamed prefix read
+│  │  ├─ index.ts        # getBridge(): detects the host, picks the impl (no mock fallback in-host)
+│  │  ├─ errors.ts       # HostBridgeError → blocking "Can't reach the Polkadot host" screen
+│  │  └─ diagnostics.ts  # which host transport this page got (shared client / port / iframe)
+│  ├─ config.ts          # .dot identity, key domains, topics, heartbeats, statement TTL
+│  ├─ dotns.ts           # dotNS identifier from the loaded hostname (Web gateway `.li` stripped)
+│  ├─ allowance.ts       # re-request a lapsed RFC-0010 allowance once, on write failure only
+│  ├─ keys.ts · aes.ts · cid.ts      # HKDF content keys, packed AES-GCM, CIDv1 — byte-compatible with the SDKs (oracle-tested)
+│  ├─ bulletin.ts        # encrypted playlist bodies + library index (CID), body re-validation
+│  ├─ sync.ts · envelope.ts · lww.ts # continuity channels (≤ 512 B envelopes, Lamport last-write-wins)
+│  ├─ share.ts           # share codes (base64url pointer) + host chat delivery
+│  ├─ m3u.ts · url.ts    # parse + sanitization (XSS, design R3); the one http(s) predicate
+│  ├─ epg-sources.ts     # CONFIG — the ordered guide sources (edit here)
+│  ├─ epg-resolve.ts     # the cascade; epg.ts = now/next + the panel's entry points
+│  ├─ epg-xtream.ts · epg-xmltv.ts · epg-guide-directory.ts   # one module per source kind
+│  ├─ epg-match.ts · epg-country.ts · epg-playlist.ts · epg-cache.ts · codec.ts
+│  │                     # name matching, country clues, per-playlist guide config, per-device cache (gzip)
+│  ├─ tv.ts · tv-input.ts · tv-nav.ts   # TV mode detection, remote keys, geometric focus
+│  ├─ lazy-module.ts     # retrying lazy import (the host's service worker can 404 when cold)
+│  ├─ toast.ts · cn.ts · errors.ts · bytes.ts · hash.ts · host.ts
+│  └─ sample.ts          # demo playlist (test HLS streams) + generated demo guide
+├─ components/
+│  ├─ ui/                # shadcn/ui — installed, never hand-edited
+│  ├─ ChannelRow · EpgPanel · EpgChannelPicker · PlayerOverlay
+│  └─ ScreenHeader · ErrorBoundary · HostUnavailable · AppToaster
+├─ screens/              # Library · Player · AddPlaylist · EditPlaylist · ShareSheet · EpgGuide
 ├─ player/HlsPlayer.tsx
-├─ screens/            # Library · Player · AddPlaylist · ShareSheet (shadcn/ui)
-├─ state/              # app state + actions, one module per responsibility
-│  ├─ app-state.ts     # state container (useApp / getState / setState)
-│  ├─ navigation.ts    # screen stack (navigate / goBack / teleports)
-│  ├─ playlists.ts     # playlist CRUD + tune (save → CID → republish index)
-│  ├─ sharing.ts       # share codes + chat share + import
-│  ├─ bootstrap.ts     # boot + resume algorithm + cross-host subscriptions
-│  └─ demo.ts          # off-host simulation hooks (window.__anytub3, e2e)
-├─ HostThemeBridge.tsx # host theme → setTheme(berlin-day | berlin-night)
+├─ state/                # app state + actions, one module per responsibility
+│  ├─ app-state.ts       # state container (useApp / getState / setState)
+│  ├─ navigation.ts      # screen stack (navigate / goBack / teleports)
+│  ├─ playlists.ts       # playlist CRUD + tune + guide configuration (save → CID → republish index)
+│  ├─ sharing.ts         # share codes + chat share + import
+│  ├─ bootstrap.ts       # boot + resume algorithm + cross-host subscriptions + host failure screen
+│  └─ demo.ts            # off-host simulation hooks (window.__anytub3, e2e)
+├─ HostThemeBridge.tsx   # host theme → setTheme(berlin-day | berlin-night)
 ├─ App.tsx · main.tsx
-├─ theme/              # Polkadot design-system token bundle (5 themes)
-└─ styles/app.css      # imports theme/index.css + TV-mode rules
+├─ theme/                # Polkadot design-system token bundle (5 themes)
+└─ styles/app.css        # imports theme/index.css + TV-mode rules
 ```
 
 ### Why a bridge rather than direct imports
@@ -176,8 +201,9 @@ Two-level state:
 
 1. **Level 1 — live handoff**: `now-playing` (`{playlistCid, channelId, ts}`) encrypted,
    published on a Statement Store channel whose **name and key are derived from the
-   wallet entropy** (identical across all hosts, opaque to others). Heartbeat ~15 s to
-   refresh the TTL. `timestamp` in cleartext = last-write-wins.
+   wallet entropy** (identical across all hosts, opaque to others). Heartbeat ~15 s keeps the
+   pointer fresh. `timestamp` in cleartext = last-write-wins on a **Lamport clock** (robust to
+   device clock skew); statements live 7 days — staleness is LWW's job, not the TTL's.
 2. **Level 2 — cold resume**: `library-head` (`{indexCid, ts}`) points to a durable
    library index on Bulletin; mirrored in a local per-device cache.
 
@@ -185,9 +211,10 @@ Two-level state:
 `library-head` → resume the freshest `now-playing` (channel vs cache) → subscribe to remote
 changes (handoff) and incoming shares. See `state/bootstrap.ts → bootstrap()`.
 
-Keys: `deriveEntropy(ctx)` (RFC-0007, deterministic/wallet) → `KeyManager.fromRawKey`, **not**
-`fromSignature` (sr25519 signatures are non-deterministic — unsuitable cross-host). Context
-domains are separated per usage (see `config.ts → KEY_CTX`).
+Keys: `deriveEntropy(ctx)` (RFC-0007, deterministic/wallet) → HKDF-SHA256 content keys
+(`lib/keys.ts`, byte-compatible with the SDK's `KeyManager`), **not** `fromSignature` (sr25519
+signatures are non-deterministic — unsuitable cross-host). Context domains are separated per
+usage (see `config.ts → KEY_CTX`).
 
 ---
 
@@ -207,7 +234,13 @@ domains are separated per usage (see `config.ts → KEY_CTX`).
   instead of a screen crash.
 - **Statement Store budgets**: `now-playing` (~150-250 B) + `library-head` (~120 B) stay
   under `MAX_USER_TOTAL` (1024 B) and each statement < 512 B.
-- Encryption: `aesGcmEncryptPacked` for contents/states; `sealedBox` for shares.
+- Encryption: packed AES-GCM (`lib/aes.ts`) for contents and states. A share code carries the
+  content key in clear — bearer semantics, the user picks a trusted channel to send it; an
+  imported body is re-sanitized like a fresh m3u and re-stored under the recipient's own key.
+- **Guide data is untrusted and stays local**: XMLTV is parsed block by block with `DOMParser`
+  (no external entities), programme icons are http(s) only, and guides live only in the
+  per-device cache — never on Bulletin. The automatic resolver only contacts the configured
+  directory hosts and the playlist's own provider.
 
 ---
 
@@ -240,6 +273,10 @@ override for other environments. Every deploy mints a new root CID even for iden
 account, signer, product account (scoped to that name — derived at runtime from the loaded
 hostname, see `lib/dotns.ts`), entropy, Bulletin, Statement Store and chat.
 
+Names deployed so far on `paseo-next-v2`: `anytub3tv.paseo` and `anytub3epg.paseo`
+(2026-09-23, this `main`). Both belong to bulletin-deploy's default worker account until claimed
+with `bulletin-deploy login` then `bulletin-deploy --env paseo-next-v2 transfer <name>`.
+
 **Inspect what hosts see on dotNS** (root manifest, `app.` executable record, resolvers,
 contenthash) without a device: `npm run dotns:inspect -- paseo-next-v2 anytub3tv` (needs the
 global bulletin-deploy). A host that finds the root manifest but no `app.` record shows
@@ -270,39 +307,45 @@ resolution for the process lifetime, so after a fresh deploy force-quit it befor
 > socket). The failure screen now prints a `transport=… origin=…` diagnostics line
 > (`lib/bridge/diagnostics.ts`) — ask for it in any in-host bug report.
 
-**Prerequisites (see the repo's `DEPLOYMENT.md`):** a `.dot` name (on the Parity testnet,
+**Prerequisites (see bulletin-deploy's `DEPLOYMENT.md`):** a `.dot` name (on the Parity testnet,
 registration may require a Proof-of-Personhood — request via an issue on [paritytech/dotns](https://github.com/paritytech/dotns/issues));
 Bulletin storage authorization (managed by `//Alice` on testnet; a classic first-run error:
 `not authorized to upload`); a little Asset Hub funds for the DotNS fees ([faucet](https://faucet.polkadot.io/)).
 
 > **Dev inside the host:** the product account is tied to the domain of the loaded URL — `localhost:<port>`
-> in dev, `anytub3.dot` once deployed (so Bulletin writes only really validate
-> once deployed under the correct name). To test inside the host, prefer **`npm run preview`**
+> in dev, the deployed name (e.g. `anytub3tv.paseo`) in production (so Bulletin writes only really
+> validate once deployed under the correct name). To test inside the host, prefer **`npm run preview`**
 > (built bundle) over `npm run dev`: Vite dev mode runs into the host's CSP restrictions.
 
 ---
 
-## Points to confirm on the host side (outside product-sdk — design doc 3 §7)
+## Host-side status (outside product-sdk — design doc 3 §7)
 
-Marked `[confirmer host]` in `src/lib/bridge/real.ts`:
+Resolved since the design documents:
 
-1. **`themeSubscribe` payload**: the bridge already tolerates `{ variant: "Light" | "Dark" }`
-   as a string containing "dark".
-2. **Discovering the recipient's Curve25519 key (R2)**: `listContacts()` returns the
-   rooms (`roomId`/`participatingAs`); the recipient's display name and encryption key
-   remain to be wired (profile topic / People Chain).
-3. **`dot deploy` CLI**: path argument, auth, target network, dotNS registration.
-4. **Bulletin storage**: we favor the **host's preimage manager**
-   (`getPreimageManager().submit/lookup`), sponsored via the `BulletinAllowance` —
-   no RPC connection or signer on the product side. Fall back to a direct
-   `CloudStorageClient` (`createLazySigner(getProductAccountSigner)`) if the host doesn't
-   expose a preimage manager. Allowances are never requested up front (RFC-0010 provisions
-   them implicitly on the first write); a write failing for want of one re-requests it
-   **once** and retries (`lib/allowance.ts`) — the only path that may show the host dialog.
-5. **Handshake**: `init()` waits for the transport to report `connected`, then calls
-   `system.handshake()`; `UnsupportedProtocolVersion` blocks with a redeploy hint, a host
-   that never answers (the SDK's 10 s deadline rejects) blocks with transport diagnostics —
-   every later call would otherwise wait out its 120 s deadline. Other domain errors only warn.
+- **Deployment**: `bulletin-deploy` with the product manifest (see above) — there is no `dot deploy` CLI.
+- **Bulletin storage**: the **host's preimage manager** (`getPreimageManager().submit/lookup`),
+  sponsored via the `BulletinAllowance` — no RPC connection or signer on the product side; a direct
+  `CloudStorageClient` (`createLazySigner(getProductAccountSigner)`) is the fallback for hosts
+  without one. Allowances are never requested up front (RFC-0010 provisions them implicitly on
+  the first write); a write failing for want of one re-requests it **once** and retries
+  (`lib/allowance.ts`) — the only path that may show the host dialog.
+- **Handshake**: `init()` waits for the transport to report `connected`, then calls
+  `system.handshake()`; `UnsupportedProtocolVersion` blocks with a redeploy hint, a host that never
+  answers (the SDK's 10 s deadline rejects) blocks with transport diagnostics — every later call
+  would otherwise wait out its 120 s deadline. Other domain errors only warn.
+- **Contacts and recipient keys (R2)**: the product host-api exposes no contact directory and no
+  recipient key, so the product never seals to a contact itself. A share is a copyable code;
+  "Send to chat" posts a Custom message into a product room the host may surface (current host
+  builds answer `registerRoom` with "Not implemented", so that path stays best-effort).
 
-Everything else (components, theming, the 4 flows, continuity) is anchored to the real APIs
+Still marked `[confirm host]` in `src/lib/bridge/real.ts`:
+
+1. **Theme payload**: the bridge tolerates `{ variant: "Light" | "Dark" }` as well as a string
+   containing "dark".
+2. **Chat**: room registration, and the confidentiality of Custom messages once a host implements chat.
+3. **External fetches in-host**: guide downloads (`httpGet*`) fall under the host's external-access
+   permission like the streams — the prompt/allow behaviour on Mobile and Desktop is unverified.
+
+Everything else (components, theming, the flows above, continuity) is anchored to the real APIs
 of the installed packages.
